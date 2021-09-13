@@ -263,16 +263,8 @@ func (q *Querier) checkQuery(querySQL string) error {
 	return nil
 }
 
-// buildQuery 构造查询语句
-func (q *Querier) buildQuery() error {
-	if q.QuerySQL != "" {
-		// 检查查询SQL是否存在语法问题
-		err := q.checkQuery(q.QuerySQL)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
+// buildNoLimitQuery 构造没有limit的查询语句
+func (q *Querier) buildNoLimitQuery() (string, error) {
 	querySQL := bytes.Buffer{}
 	querySQL.WriteString("SELECT ")
 
@@ -282,92 +274,6 @@ func (q *Querier) buildQuery() error {
 		fields = "*"
 	}
 	querySQL.WriteString(fields)
-
-	// 表
-	tableName := NewValue(q.queryMaps["table"]).String()
-	if tableName == "" {
-		return errors.New("query table not specified")
-	}
-	querySQL.WriteString(" FROM ")
-	querySQL.WriteString(quote(tableName))
-
-	// 检查联表信息
-	if len(q.joinTables) > 0 {
-		for _, joinTbl := range q.joinTables {
-			if strings.TrimSpace(joinTbl.table) == "" {
-				return errors.New("empty join table name")
-			}
-			if strings.TrimSpace(joinTbl.condition) == "" {
-				return errors.New("join condition empty")
-			}
-			querySQL.WriteString(" ")
-			querySQL.WriteString(joinTbl.joinType)
-			querySQL.WriteString(" JOIN ")
-			querySQL.WriteString(joinTbl.table)
-			querySQL.WriteString(" ON ")
-			querySQL.WriteString(joinTbl.condition)
-		}
-	}
-
-	// 查询条件
-	condition, err := q.buildCondition()
-	if err != nil {
-		return err
-	}
-	if condition != "" {
-		querySQL.WriteString(" WHERE ")
-		querySQL.WriteString(condition)
-	}
-
-	// 检查是否对查询进行分组
-	groupBy := NewValue(q.queryMaps["group_by"]).String()
-	if groupBy != "" {
-		querySQL.WriteString(" GROUP BY ")
-		querySQL.WriteString(groupBy)
-		// 检查是否有分组过滤
-		having, err := NewConditionBuilder().Build(q.queryMaps["having"], "AND")
-		if err != nil {
-			return err
-		}
-		if having != "" {
-			querySQL.WriteString(" HAVING ")
-			querySQL.WriteString(having)
-		}
-	}
-
-	// 设置排序
-	orderBy := NewValue(q.queryMaps["order_by"]).String()
-	if orderBy != "" {
-		querySQL.WriteString(" ORDER BY ")
-		querySQL.WriteString(orderBy)
-	}
-
-	// 设置limit信息
-	offset := NewValue(q.queryMaps["offset"]).Int64()
-	limitNum := NewValue(q.queryMaps["limit"]).Int64()
-	if limitNum > 0 {
-		querySQL.WriteString(fmt.Sprintf(" LIMIT %d, %d", offset, limitNum))
-	}
-
-	// 返回查询SQL
-	q.QuerySQL = querySQL.String()
-	return nil
-}
-
-// buildCountQuery 构造count查询语句，用于统计查询数据的数量
-func (q *Querier) buildCountQuery() (string, error) {
-	// 根据原始查询语句构造Count语句
-	if q.QuerySQL != "" && q.queryMaps["where"] == nil {
-		return q.buildCountQueryFromRawQuery()
-	}
-	// 根据条件构造Count语句
-	return q.buildCountQueryFromConditions()
-}
-
-// buildCountQueryFromConditions 根据条件构造count语句
-func (q *Querier) buildCountQueryFromConditions() (string, error) {
-	querySQL := bytes.Buffer{}
-	querySQL.WriteString("SELECT COUNT(0)")
 
 	// 表
 	tableName := NewValue(q.queryMaps["table"]).String()
@@ -405,6 +311,82 @@ func (q *Querier) buildCountQueryFromConditions() (string, error) {
 		querySQL.WriteString(condition)
 	}
 
+	// 检查是否对查询进行分组
+	groupBy := NewValue(q.queryMaps["group_by"]).String()
+	if groupBy != "" {
+		querySQL.WriteString(" GROUP BY ")
+		querySQL.WriteString(groupBy)
+		// 检查是否有分组过滤
+		having, err := NewConditionBuilder().Build(q.queryMaps["having"], "AND")
+		if err != nil {
+			return "", err
+		}
+		if having != "" {
+			querySQL.WriteString(" HAVING ")
+			querySQL.WriteString(having)
+		}
+	}
+
+	// 设置排序
+	orderBy := NewValue(q.queryMaps["order_by"]).String()
+	if orderBy != "" {
+		querySQL.WriteString(" ORDER BY ")
+		querySQL.WriteString(orderBy)
+	}
+	return querySQL.String(), nil
+}
+
+// buildQuery 构造查询语句
+func (q *Querier) buildQuery() error {
+	if q.QuerySQL != "" {
+		// 检查查询SQL是否存在语法问题
+		err := q.checkQuery(q.QuerySQL)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	querySQL := bytes.Buffer{}
+
+	// 构造没有limit的查询
+	noLimitQuery, err := q.buildNoLimitQuery()
+	if err != nil {
+		return err
+	}
+	querySQL.WriteString(noLimitQuery)
+
+	// 设置limit信息
+	offset := NewValue(q.queryMaps["offset"]).Int64()
+	limitNum := NewValue(q.queryMaps["limit"]).Int64()
+	if limitNum > 0 {
+		querySQL.WriteString(fmt.Sprintf(" LIMIT %d, %d", offset, limitNum))
+	}
+
+	// 返回查询SQL
+	q.QuerySQL = querySQL.String()
+	return nil
+}
+
+// buildCountQuery 构造count查询语句，用于统计查询数据的数量
+func (q *Querier) buildCountQuery() (string, error) {
+	// 根据原始查询语句构造Count语句
+	if q.QuerySQL != "" && q.queryMaps["where"] == nil {
+		return q.buildCountQueryFromRawQuery()
+	}
+	// 根据条件构造Count语句
+	return q.buildCountQueryFromConditions()
+}
+
+// buildCountQueryFromConditions 根据条件构造count语句
+func (q *Querier) buildCountQueryFromConditions() (string, error) {
+	noLimitQuery, err := q.buildNoLimitQuery()
+	if err != nil {
+		return "", err
+	}
+	querySQL := bytes.Buffer{}
+	querySQL.WriteString("SELECT COUNT(0) FROM ( ")
+	querySQL.WriteString(noLimitQuery)
+	querySQL.WriteString(" ) a")
 	// 返回查询SQL
 	return querySQL.String(), nil
 }
@@ -419,34 +401,20 @@ func (q *Querier) buildCountQueryFromRawQuery() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 构造count语句
-	querySQL := bytes.Buffer{}
-	querySQL.WriteString("SELECT COUNT(0) ")
 
 	// 先简单处理(逻辑上有问题，后续再解决)
 	lowerQuerySQL := strings.ToLower(q.QuerySQL)
-	fromPos := strings.Index(lowerQuerySQL, " from ")
-	// wherePos := strings.Index(lowerQuerySQL, "where")
-	orderPos := strings.LastIndex(lowerQuerySQL, " order ")
-	groupPos := strings.LastIndex(lowerQuerySQL, " group ")
 	limitPos := strings.LastIndex(lowerQuerySQL, " limit ")
-	endPos := 0
-	if orderPos > 0 {
-		endPos = orderPos
+	noLimitQuery := q.QuerySQL
+	if limitPos > 0 {
+		noLimitQuery = q.QuerySQL[0:limitPos]
 	}
-	if groupPos > 0 && groupPos < endPos {
-		endPos = groupPos
-	}
-	if limitPos > 0 && limitPos < endPos {
-		endPos = limitPos
-	}
-	countPart := ""
-	if endPos > 0 && endPos > fromPos {
-		countPart = q.QuerySQL[fromPos:endPos]
-	} else {
-		countPart = q.QuerySQL[fromPos:]
-	}
-	querySQL.WriteString(countPart)
+
+	// 构造count语句
+	querySQL := bytes.Buffer{}
+	querySQL.WriteString("SELECT COUNT(0) FROM ( ")
+	querySQL.WriteString(noLimitQuery)
+	querySQL.WriteString(" ) a")
 
 	// 返回查询SQL
 	return querySQL.String(), nil
