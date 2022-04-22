@@ -272,7 +272,7 @@ func (q *Querier) buildNoLimitQuery() (string, error) {
             querySQL.WriteString(" ")
             querySQL.WriteString(joinTbl.joinType)
             querySQL.WriteString(" JOIN ")
-            querySQL.WriteString(joinTbl.table)
+            querySQL.WriteString(quote(joinTbl.table))
             querySQL.WriteString(" ON ")
             querySQL.WriteString(joinTbl.condition)
         }

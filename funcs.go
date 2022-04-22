@@ -13,7 +13,30 @@ func quote(field string) string {
 	if strings.Contains(field, "`") || strings.Contains(field, "(") {
 		return field
 	}
-	// a.b格式
+	// 检查是否包含别名
+	if strings.Contains(field, " ") {
+		fieldParts := strings.Split(field, " ")
+		size := len(fieldParts)
+		if size == 1 {
+			return fmt.Sprintf("`%s`", fieldParts[0])
+		}
+		var quoteRs bytes.Buffer
+		for i := 0; i < size; i++ {
+			if i == 0 || i == size - 1 {
+				quoteRs.WriteString(quoteField(fieldParts[i]))
+				quoteRs.WriteString(" ")
+			} else {
+				quoteRs.WriteString(fieldParts[i])
+				quoteRs.WriteString(" ")
+			}
+		}
+		return quoteRs.String()
+	}
+	// 普通字段/表名
+	return quoteField(field)
+}
+
+func quoteField(field string) string {
 	if strings.Contains(field, ".") {
 		fieldParts := strings.Split(field, ".")
 		size := len(fieldParts)
@@ -25,25 +48,6 @@ func quote(field string) string {
 		}
 		return fmt.Sprintf("`%s`", strings.Join(fieldParts, "`.`"))
 	}
-	// 检查是否包含别名
-	if strings.Contains(field, " ") {
-		fieldParts := strings.Split(field, " ")
-		size := len(fieldParts)
-		if size == 1 {
-			return fmt.Sprintf("`%s`", fieldParts[0])
-		}
-		var quoteRs bytes.Buffer
-		for i := 0; i < size; i++ {
-			if i == 0 || i == size - 1 {
-				quoteRs.WriteString(fmt.Sprintf("`%s` ", fieldParts[i]))
-			} else {
-				quoteRs.WriteString(fieldParts[i])
-				quoteRs.WriteString(" ")
-			}
-		}
-		return quoteRs.String()
-	}
-	// 普通字段/表名
 	return fmt.Sprintf("`%s`", field)
 }
 
