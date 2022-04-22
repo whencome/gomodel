@@ -12,32 +12,32 @@ import (
 
 // Condition 定义一个sql条件组
 type Condition struct {
-    Logic       string  // 条件逻辑，AND / OR
-    Conds       []*Condition  // 条件数组
-    condData    []map[string]interface{} // 条件组数据，优先级高于Conds
+    Logic    string                   // 条件逻辑，AND / OR
+    Conds    []*Condition             // 条件数组
+    condData []map[string]interface{} // 条件组数据，优先级高于Conds
 }
 
 // NewAndCondition 创建一个And条件组
 func NewAndCondition() *Condition {
     return &Condition{
-        Logic : "AND",
-        Conds : make([]*Condition, 0),
-        condData : make([]map[string]interface{}, 0),
+        Logic:    "AND",
+        Conds:    make([]*Condition, 0),
+        condData: make([]map[string]interface{}, 0),
     }
 }
 
 // NewOrCondition 创建一个Or条件组
 func NewOrCondition() *Condition {
     return &Condition{
-        Logic : "OR",
-        Conds : make([]*Condition, 0),
-        condData : make([]map[string]interface{}, 0),
+        Logic:    "OR",
+        Conds:    make([]*Condition, 0),
+        condData: make([]map[string]interface{}, 0),
     }
 }
 
 // Add 添加一个条件
 func (c *Condition) Add(field string, val interface{}) {
-    c.condData = append(c.condData, map[string]interface{}{field:val})
+    c.condData = append(c.condData, map[string]interface{}{field: val})
 }
 
 // AddBatch 批量添加条件
@@ -86,13 +86,12 @@ func BuildCondition(conds interface{}) (string, error) {
     return NewConditionBuilder().Build(conds, "AND")
 }
 
-
 /*********************************************************
  ********** Definition of condition builder  *************
  *********************************************************/
 
 // ConditionBuilder 条件构造器，构造SQL查询条件
-type ConditionBuilder struct {}
+type ConditionBuilder struct{}
 
 // NewConditionBuilder 创建一个新的条件构造器
 func NewConditionBuilder() *ConditionBuilder {
@@ -222,10 +221,10 @@ func (cb *ConditionBuilder) buildMatchLogicQuery(field, matchLogic string, value
     }
     field = strings.ReplaceAll(field, "`", "")
     switch matchLogic {
-    case "=","!=",">",">=","<","<=","<>","LIKE","NOT LIKE","IS":
+    case "=", "!=", ">", ">=", "<", "<=", "<>", "LIKE", "NOT LIKE", "IS":
         fieldValue := NewValue(value).SQLValue()
         return fmt.Sprintf("%s %s %s", quote(field), matchLogic, fieldValue), nil
-    case "IN","NOT IN":
+    case "IN", "NOT IN":
         inVales := transValue2Array(value)
         if len(inVales) == 0 {
             return "", fmt.Errorf("[%s] value not qualified", matchLogic)
@@ -248,4 +247,3 @@ func (cb *ConditionBuilder) buildMatchLogicQuery(field, matchLogic string, value
         return "", fmt.Errorf("unsupported match logic %s", matchLogic)
     }
 }
-

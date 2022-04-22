@@ -7,7 +7,10 @@ import (
 
 //------------ ERRORS DEFINITION ------------//
 var (
+	// 数据库连接未设置
 	ErrDBConnectionNotSet = errors.New("db connection not set")
+	// 事务提交失败
+	ErrTxCommitFailed = errors.New("transaction commit failed")
 )
 
 //------------ DEFINITION OF RESOURCE MANAGER ------------//

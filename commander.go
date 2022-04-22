@@ -2,7 +2,6 @@ package gomodel
 
 import (
     "database/sql"
-    "fmt"
 )
 
 // Commander 执行者，用于执行数据库查询等操作
@@ -105,7 +104,7 @@ func (c *Commander) ExecuteTx(f func(commander *Commander) error) error {
     }
     if c.Commit() != nil {
         _ = c.Rollback()
-        return fmt.Errorf("transaction commit failed")
+        return ErrTxCommitFailed
     }
     return nil
 }
