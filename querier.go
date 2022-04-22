@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/whencome/gomodel/sqlchecker"
 )
 
 // 定义联表方式
@@ -242,27 +240,6 @@ func (q *Querier) buildCondition() (string, error) {
 	return NewConditionBuilder().Build(q.queryMaps["where"], "AND")
 }
 
-// checkQuery 检查查询语法以及命令是否支持
-func (q *Querier) checkQuery(querySQL string) error {
-	// 如果没有开启前置检查，则不进行语法检查
-	if !q.Settings.IsPreQuerySyntaxCheckEnabled() {
-		return nil
-	}
-	// 检查查询SQL是否存在语法问题
-	chkRs := sqlchecker.Check(querySQL)
-	if !chkRs.IsPassed {
-		if chkRs.Error != nil {
-			return chkRs.Error
-		}
-		return errors.New("SQL syntax check failed：" + querySQL)
-	}
-	// 检查是否为select语句
-	if chkRs.Command != "SELECT" {
-		return fmt.Errorf("[%s] command not supported in querier：%s", chkRs.Command, querySQL)
-	}
-	return nil
-}
-
 // buildNoLimitQuery 构造没有limit的查询语句
 func (q *Querier) buildNoLimitQuery() (string, error) {
 	querySQL := bytes.Buffer{}
@@ -339,11 +316,6 @@ func (q *Querier) buildNoLimitQuery() (string, error) {
 // buildQuery 构造查询语句
 func (q *Querier) buildQuery() error {
 	if q.QuerySQL != "" {
-		// 检查查询SQL是否存在语法问题
-		err := q.checkQuery(q.QuerySQL)
-		if err != nil {
-			return err
-		}
 		return nil
 	}
 	querySQL := bytes.Buffer{}
@@ -396,12 +368,6 @@ func (q *Querier) buildCountQueryFromRawQuery() (string, error) {
 	if q.QuerySQL == "" {
 		return "", errors.New("query sql can not be empty")
 	}
-	// 检查查询SQL
-	err := q.checkQuery(q.QuerySQL)
-	if err != nil {
-		return "", err
-	}
-
 	// 先简单处理(逻辑上有问题，后续再解决)
 	lowerQuerySQL := strings.ToLower(q.QuerySQL)
 	limitPos := strings.LastIndex(lowerQuerySQL, " limit ")
