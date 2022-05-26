@@ -205,3 +205,21 @@ func TestModelManager_FindOne(t *testing.T) {
 	}
 	t.Logf("user = %#v", u)
 }
+
+// 测试构造条件
+func TestCondition_AddRaw(t *testing.T) {
+	m := NewUserModel()
+	conds := m.NewOrCondition()
+	conds.Add("id", 2)
+	conds.AddRaw("name like '%Jack%'")
+	rows, e := m.FindAll(conds, "id ASC")
+	if e != nil {
+		t.Logf("query user failed: %s", e)
+		t.Fail()
+	}
+	if len(rows) > 0 {
+		for i, row := range rows {
+			t.Logf("%d = %#v", i, row)
+		}
+	}
+}

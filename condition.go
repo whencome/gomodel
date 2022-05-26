@@ -14,7 +14,7 @@ import (
 type Condition struct {
     Logic    string                   // 条件逻辑，AND / OR
     Conds    []*Condition             // 条件数组
-    condData []map[string]interface{} // 条件组数据，优先级高于Conds
+    condData []interface{} // 条件组数据，优先级高于Conds
 }
 
 // NewAndCondition 创建一个And条件组
@@ -22,7 +22,7 @@ func NewAndCondition() *Condition {
     return &Condition{
         Logic:    "AND",
         Conds:    make([]*Condition, 0),
-        condData: make([]map[string]interface{}, 0),
+        condData: make([]interface{}, 0),
     }
 }
 
@@ -31,7 +31,7 @@ func NewOrCondition() *Condition {
     return &Condition{
         Logic:    "OR",
         Conds:    make([]*Condition, 0),
-        condData: make([]map[string]interface{}, 0),
+        condData: make([]interface{}, 0),
     }
 }
 
@@ -50,6 +50,15 @@ func (c *Condition) AddBatch(batchConds []map[string]interface{}) {
 // AddCondition 田间一个条件组
 func (c *Condition) AddCondition(cc *Condition) {
     c.Conds = append(c.Conds, cc)
+}
+
+// AddRaw 添加写好的SQL条件
+func (c *Condition) AddRaw(s string) {
+    s = strings.TrimSpace(s)
+    if s == "" {
+        return
+    }
+    c.condData = append(c.condData, s)
 }
 
 // Build 构造条件
