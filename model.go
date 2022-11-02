@@ -54,6 +54,7 @@ type ModelManager struct {
     Model             Modeler
     Fields            []string
     FieldMaps         map[string]string
+    PropMaps          map[string]string
     Settings          *Options
     GetDBFunc         func() (*sql.DB, error)
     preWriteFunc      PreWriteAdjustFunc
@@ -65,6 +66,7 @@ type ModelManager struct {
 // NewModelManager 创建一个新的ModelManager
 func NewModelManager(m Modeler) *ModelManager {
     fieldMaps := map[string]string{}
+    propMaps := make(map[string]string)
     fields := make([]string, 0)
     // 获取tag中的内容
     rt := reflect.TypeOf(m)
@@ -79,11 +81,13 @@ func NewModelManager(m Modeler) *ModelManager {
         }
         fields = append(fields, tableFieldName)
         fieldMaps[tableFieldName] = fieldName
+        propMaps[fieldName] = tableFieldName
     }
     return &ModelManager{
         Model:             m,
         Fields:            fields,
         FieldMaps:         fieldMaps,
+        PropMaps:          propMaps,
         Settings:          NewDefaultOptions(),
         sqlValueCallbacks: make(map[string]SqlValueAdjustFunc, 0),
     }
@@ -750,4 +754,13 @@ func (mm *ModelManager) QueryRow(querySql string) (map[string]string, error) {
         return nil, err
     }
     return row, nil
+}
+
+// QueryAssoc 根据SQL查询满足条件的全部数据
+func (mm *ModelManager) QueryAssoc(querySql string, field string) (map[string]map[string]string, error) {
+    mapData, err := mm.NewRawQuerier(querySql).QueryAssoc(field)
+    if err != nil {
+        return nil, err
+    }
+    return mapData, nil
 }

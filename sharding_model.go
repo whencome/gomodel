@@ -554,3 +554,13 @@ func (m *ShardingModelManager) QueryRow(querySql string) (map[string]string, err
     }
     return row, nil
 }
+
+// QueryAssoc 根据SQL查询满足条件的全部数据
+func (mm *ShardingModelManager) QueryAssoc(querySql string, field string) (map[string]map[string]string, error) {
+    mapData, err := mm.NewRawQuerier(querySql).QueryAssoc(field)
+    if err != nil {
+        return nil, err
+    }
+    return mapData, nil
+}
+

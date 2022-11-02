@@ -548,3 +548,23 @@ func (q *Querier) QueryAll() ([]map[string]string, error) {
     }
     return queryResult.Rows, nil
 }
+
+// QueryAssoc 查询全部记录并以自定field为键返回对应的map
+func (q *Querier) QueryAssoc(field string) (map[string]map[string]string, error) {
+    queryResult, err := q.Query()
+    if err != nil {
+        return nil, err
+    }
+    if queryResult.RowsCount == 0 {
+        return nil, nil
+    }
+    result := make(map[string]map[string]string)
+    for _, row := range queryResult.Rows {
+        v, ok := row[field]
+        if !ok {
+            continue
+        }
+        result[v] = row
+    }
+    return result, nil
+}
