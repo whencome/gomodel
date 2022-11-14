@@ -48,13 +48,11 @@ type Manager interface {
     GetConnection() (*sql.DB, error)
 }
 
-// 定义ModelManager结构体，用于数据model操作管理
+// ModelManager 定义ModelManager结构体，用于数据model操作管理
 type ModelManager struct {
     Manager
+    *ModelerInfo
     Model             Modeler
-    Fields            []string
-    FieldMaps         map[string]string
-    PropMaps          map[string]string
     Settings          *Options
     GetDBFunc         func() (*sql.DB, error)
     preWriteFunc      PreWriteAdjustFunc
@@ -65,29 +63,9 @@ type ModelManager struct {
 
 // NewModelManager 创建一个新的ModelManager
 func NewModelManager(m Modeler) *ModelManager {
-    fieldMaps := map[string]string{}
-    propMaps := make(map[string]string)
-    fields := make([]string, 0)
-    // 获取tag中的内容
-    rt := reflect.TypeOf(m)
-    // 获取字段数量
-    fieldsNum := rt.Elem().NumField()
-    for i := 0; i < fieldsNum; i++ {
-        field := rt.Elem().Field(i)
-        fieldName := field.Name
-        tableFieldName := field.Tag.Get(m.GetDBFieldTag())
-        if tableFieldName == "" {
-            continue
-        }
-        fields = append(fields, tableFieldName)
-        fieldMaps[tableFieldName] = fieldName
-        propMaps[fieldName] = tableFieldName
-    }
     return &ModelManager{
         Model:             m,
-        Fields:            fields,
-        FieldMaps:         fieldMaps,
-        PropMaps:          propMaps,
+        ModelerInfo:       pool.Parse(m),
         Settings:          NewDefaultOptions(),
         sqlValueCallbacks: make(map[string]SqlValueAdjustFunc, 0),
     }
@@ -142,7 +120,7 @@ func (mm *ModelManager) NewAndCondition() *Condition {
     return NewAndCondition()
 }
 
-// NewAndCondition 创建一个OR条件组
+// NewOrCondition 创建一个OR条件组
 func (mm *ModelManager) NewOrCondition() *Condition {
     return NewOrCondition()
 }
@@ -225,7 +203,9 @@ func (mm *ModelManager) MatchObject(obj interface{}) bool {
     if !ok {
         return false
     }
-    if mm.Model == nil || modelObj.GetTableName() != mm.Model.GetTableName() {
+    if mm.Model == nil ||
+        modelObj.GetDatabase() != mm.Model.GetDatabase() ||
+        modelObj.GetTableName() != mm.Model.GetTableName() {
         return false
     }
     return true
@@ -280,36 +260,54 @@ func (mm *ModelManager) convert2Model(obj interface{}) (Modeler, bool) {
     return modelObj, true
 }
 
-// BuildBatchInsertSql 构造批量插入语句
-func (mm *ModelManager) BuildBatchInsertSql(data interface{}) (string, error) {
+func (mm *ModelManager) parseModelers(data interface{}) ([]Modeler, error) {
     if data == nil {
-        return "", errors.New("can not insert nil data")
+        return nil, errors.New("empty data not acceptable")
     }
-    var objects []interface{} = make([]interface{}, 0)
+    modelers := make([]Modeler, 0)
     switch reflect.TypeOf(data).Kind() {
     case reflect.Slice, reflect.Array:
         valData := reflect.ValueOf(data)
         arrSize := valData.Len()
         if arrSize == 0 {
-            return "", errors.New("empty params")
+            return nil, errors.New("empty data")
         }
         for i := 0; i < arrSize; i++ {
-            objects = append(objects, valData.Index(i).Interface())
+            v := valData.Index(i).Interface()
+            modelObj, ok := mm.convert2Model(v)
+            if !ok {
+                return nil, fmt.Errorf("invalid modeler, expect %T, got %T", mm.Model, v)
+            }
+            modelers = append(modelers, modelObj)
         }
-    default:
-        return "", errors.New("invalid params")
+    case reflect.Struct:
+        modelObj, ok := mm.convert2Model(data)
+        if !ok {
+            return nil, fmt.Errorf("invalid modeler, expect %T, got %T", mm.Model, data)
+        }
+        modelers = append(modelers, modelObj)
+    }
+    if len(modelers) == 0 {
+        return nil, errors.New("empty data")
+    }
+    return modelers, nil
+}
+
+// BuildBatchInsertSql 构造批量插入语句
+func (mm *ModelManager) BuildBatchInsertSql(data interface{}) (string, error) {
+    if data == nil {
+        return "", errors.New("can not insert nil data")
+    }
+    objects, err := mm.parseModelers(data)
+    if err != nil {
+        return "", err
     }
     // 先获取字段列表
     insertFields := mm.getInsertFields()
     insertSql := fmt.Sprintf("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
-    insertCount := 0
     for i, object := range objects {
-        modelObj, ok := mm.convert2Model(object)
-        if !ok {
-            continue
-        }
         values := make([]string, 0)
-        rv := reflect.ValueOf(modelObj)
+        rv := reflect.ValueOf(object)
         for _, field := range insertFields {
             propName := mm.FieldMaps[field]
             val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
@@ -319,10 +317,6 @@ func (mm *ModelManager) BuildBatchInsertSql(data interface{}) (string, error) {
             insertSql += ","
         }
         insertSql += fmt.Sprintf("(%s)", strings.Join(values, ","))
-        insertCount++
-    }
-    if insertCount <= 0 {
-        return "", errors.New("no any qualified data to insert")
     }
     return insertSql, nil
 }
@@ -354,37 +348,16 @@ func (mm *ModelManager) BuildReplaceIntoSql(data interface{}) (string, error) {
     if data == nil {
         return "", errors.New("can not replace into nil data")
     }
-    var objects []interface{} = make([]interface{}, 0)
-    ele := reflect.TypeOf(data)
-    if ele.Kind() == reflect.Ptr {
-        ele = ele.Elem()
-    }
-    switch ele.Kind() {
-    case reflect.Slice, reflect.Array:
-        valData := reflect.ValueOf(data)
-        arrSize := valData.Len()
-        if arrSize == 0 {
-            return "", errors.New("empty params")
-        }
-        for i := 0; i < arrSize; i++ {
-            objects = append(objects, valData.Index(i).Interface())
-        }
-    case reflect.Struct:
-        objects = append(objects, data)
-    default:
-        return "", errors.New("invalid params")
+    objects, err := mm.parseModelers(data)
+    if err != nil {
+        return "", err
     }
     // 先获取字段列表
     allFields := mm.Fields
     replaceSql := fmt.Sprintf("REPLACE INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(allFields, "`,`"))
-    count := 0
     for i, object := range objects {
-        modelObj, ok := mm.convert2Model(object)
-        if !ok {
-            continue
-        }
         values := make([]string, 0)
-        rv := reflect.ValueOf(modelObj)
+        rv := reflect.ValueOf(object)
         for _, field := range allFields {
             propName := mm.FieldMaps[field]
             val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
@@ -394,10 +367,6 @@ func (mm *ModelManager) BuildReplaceIntoSql(data interface{}) (string, error) {
             replaceSql += ","
         }
         replaceSql += fmt.Sprintf("(%s)", strings.Join(values, ","))
-        count++
-    }
-    if count <= 0 {
-        return "", errors.New("no any qualified data to replace into")
     }
     return replaceSql, nil
 }
@@ -473,10 +442,188 @@ func (mm *ModelManager) BuildDeleteSql(conds interface{}) (string, error) {
     return delSQL, nil
 }
 
+// buildInsertCommand return insert command and values, this may be safer than buildInsertSql
+func (mm *ModelManager) buildInsertCommand(object interface{}) (*SqlCommand, error) {
+    // 类型检查与转换
+    modelObj, ok := mm.convert2Model(object)
+    if !ok {
+        return nil, fmt.Errorf("insert action expect a %T object, but %T found", mm.Model, object)
+    }
+    // 先获取字段列表
+    insertFields := mm.getInsertFields()
+    insertCommand := fmt.Sprintf("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
+    // 构造插入数据
+    valueMarks := make([]string, 0)
+    values := make([]interface{}, 0)
+    rv := reflect.ValueOf(modelObj)
+    for _, field := range insertFields {
+        propName := mm.FieldMaps[field]
+        val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
+        values = append(values, val)
+        valueMarks = append(valueMarks, "?")
+    }
+    insertCommand += fmt.Sprintf("(%s)", strings.Join(valueMarks, ","))
+    return &SqlCommand{
+        Command: insertCommand,
+        Values:  values,
+    }, nil
+}
+
+// buildBatchInsertCommand 构造批量插入语句
+func (mm *ModelManager) buildBatchInsertCommand(data interface{}) (*SqlCommand, error) {
+    if data == nil {
+        return nil, errors.New("can not insert nil data")
+    }
+    objects, err := mm.parseModelers(data)
+    if err != nil {
+        return nil, err
+    }
+    // 先获取字段列表
+    insertFields := mm.getInsertFields()
+    insertCommand := fmt.Sprintf("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
+    values := make([]interface{}, 0)
+    for i, object := range objects {
+        valueMarks := make([]string, 0)
+        rv := reflect.ValueOf(object)
+        for _, field := range insertFields {
+            propName := mm.FieldMaps[field]
+            val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
+            values = append(values, val)
+            valueMarks = append(valueMarks, "?")
+        }
+        if i > 0 {
+            insertCommand += ","
+        }
+        insertCommand += fmt.Sprintf("(%s)", strings.Join(valueMarks, ","))
+    }
+    return &SqlCommand{
+        Command: insertCommand,
+        Values:  values,
+    }, nil
+}
+
+// buildReplaceIntoCommand 构造REPLACE INTO语句
+func (mm *ModelManager) buildReplaceIntoCommand(data interface{}) (*SqlCommand, error) {
+    if data == nil {
+        return nil, errors.New("can not replace into nil data")
+    }
+    objects, err := mm.parseModelers(data)
+    if err != nil {
+        return nil, err
+    }
+    // 先获取字段列表
+    allFields := mm.Fields
+    values := make([]interface{}, 0)
+    replaceCommand := fmt.Sprintf("REPLACE INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(allFields, "`,`"))
+    for i, object := range objects {
+        valueMarks := make([]string, 0)
+        rv := reflect.ValueOf(object)
+        for _, field := range allFields {
+            propName := mm.FieldMaps[field]
+            val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
+            values = append(values, val)
+            valueMarks = append(valueMarks, "?")
+        }
+        if i > 0 {
+            replaceCommand += ","
+        }
+        replaceCommand += fmt.Sprintf("(%s)", strings.Join(valueMarks, ","))
+    }
+    return &SqlCommand{
+        Command: replaceCommand,
+        Values:  values,
+    }, nil
+}
+
+// buildUpdateCommand 构造更新语句
+func (mm *ModelManager) buildUpdateCommand(object interface{}) (*SqlCommand, error) {
+    // 类型检查与转换
+    modelObj, ok := mm.convert2Model(object)
+    if !ok {
+        return nil, fmt.Errorf("insert action expect a %T object, but %T found", mm.Model, object)
+    }
+    // 先获取字段列表
+    updateFields := mm.getInsertFields()
+    updateCmd := fmt.Sprintf("UPDATE `%s` SET ", mm.GetTableName())
+    // 构造更新数据
+    values := make([]interface{}, 0)
+    rv := reflect.ValueOf(modelObj)
+    for i, field := range updateFields {
+        if i > 0 {
+            updateCmd += ", "
+        }
+        propName := mm.FieldMaps[field]
+        val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
+        updateCmd += fmt.Sprintf(" `%s` = ?")
+        values = append(values, val)
+    }
+    // 自增ID
+    autoIncrementField := mm.Model.AutoIncrementField()
+    propName := mm.FieldMaps[autoIncrementField]
+    idVal := mm.GetSqlValue(autoIncrementField, rv.Elem().FieldByName(propName).Interface())
+    updateCmd += fmt.Sprintf(" WHERE `%s` = ? ", autoIncrementField)
+    values = append(values, idVal)
+    return &SqlCommand{
+        Command: updateCmd,
+        Values:  values,
+    }, nil
+}
+
+// buildUpdateCommandByCond 构造更新语句
+func (mm *ModelManager) buildUpdateCommandByCond(params map[string]interface{}, cond interface{}) (*SqlCommand, error) {
+    if len(params) <= 0 {
+        return nil, errors.New("nothing to update")
+    }
+    where, err := NewConditionBuilder().Build(cond, "AND")
+    if err != nil {
+        return nil, err
+    }
+    if strings.TrimSpace(where) == "" {
+        return nil, errors.New("update condition can not be empty")
+    }
+    // 构造更新语句
+    updateCmd := fmt.Sprintf("UPDATE `%s` SET ", mm.GetTableName())
+    counter := 0
+    values := make([]interface{}, 0)
+    for field, iv := range params {
+        if counter > 0 {
+            updateCmd += ", "
+        }
+        val := mm.GetSqlValue(field, iv)
+        values = append(values, val)
+        updateCmd += fmt.Sprintf(" `%s` = ?", field)
+        counter++
+    }
+    updateCmd += fmt.Sprintf(" WHERE %s ", where)
+    return &SqlCommand{
+        Command: updateCmd,
+        Values:  values,
+    }, nil
+}
+
+// buildDeleteCommand 构造删除语句
+func (mm *ModelManager) buildDeleteCommand(conds interface{}) (*SqlCommand, error) {
+    delCmd := fmt.Sprintf("DELETE FROM `%s` WHERE ", mm.GetTableName())
+    where, err := BuildCondition(conds)
+    if err != nil {
+        return nil, err
+    }
+    // 不支持无条件删除
+    if where == "" {
+        return nil, fmt.Errorf("delete condition can not be empty")
+    }
+    values := make([]interface{}, 0)
+    delCmd += where
+    return &SqlCommand{
+        Command: delCmd,
+        Values:  values,
+    }, nil
+}
+
 // Insert 插入一条新数据
 func (mm *ModelManager) Insert(obj interface{}) (int64, error) {
     // 构造插入语句
-    insertSQL, err := mm.BuildInsertSql(obj)
+    insertCmd, err := mm.buildInsertCommand(obj)
     if err != nil {
         return 0, err
     }
@@ -487,10 +634,10 @@ func (mm *ModelManager) Insert(obj interface{}) (int64, error) {
     }
     // 执行插入操作
     l := NewLogger()
-    l.SetCommand(insertSQL)
+    l.SetCommand(insertCmd.Command)
     defer l.Close()
     // 执行插入操作
-    result, err := conn.Exec(insertSQL)
+    result, err := conn.Exec(insertCmd.Command, insertCmd.Values...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -502,7 +649,7 @@ func (mm *ModelManager) Insert(obj interface{}) (int64, error) {
 // InsertBatch 批量插入数据
 func (mm *ModelManager) InsertBatch(objs interface{}) (int64, error) {
     // 构造插入语句
-    insertSQL, err := mm.BuildBatchInsertSql(objs)
+    insertCmd, err := mm.buildBatchInsertCommand(objs)
     if err != nil {
         return 0, err
     }
@@ -513,10 +660,10 @@ func (mm *ModelManager) InsertBatch(objs interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(insertSQL)
+    l.SetCommand(insertCmd.Command)
     defer l.Close()
     // 执行插入操作
-    _, err = conn.Exec(insertSQL)
+    _, err = conn.Exec(insertCmd.Command, insertCmd.Values...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -528,7 +675,7 @@ func (mm *ModelManager) InsertBatch(objs interface{}) (int64, error) {
 
 // ReplaceInto 批量插入/更新数据
 func (mm *ModelManager) ReplaceInto(objs interface{}) (int64, error) {
-    replaceSQL, err := mm.BuildReplaceIntoSql(objs)
+    replaceCmd, err := mm.buildReplaceIntoCommand(objs)
     if err != nil {
         return 0, err
     }
@@ -539,10 +686,10 @@ func (mm *ModelManager) ReplaceInto(objs interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(replaceSQL)
+    l.SetCommand(replaceCmd.Command)
     defer l.Close()
     // 执行插入操作
-    _, err = conn.Exec(replaceSQL)
+    _, err = conn.Exec(replaceCmd.Command, replaceCmd.Values...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -555,7 +702,7 @@ func (mm *ModelManager) ReplaceInto(objs interface{}) (int64, error) {
 // Update 更新数据
 func (mm *ModelManager) Update(obj interface{}) (int64, error) {
     // 构造更新语句
-    updateSQL, err := mm.BuildUpdateSql(obj)
+    updateCmd, err := mm.buildUpdateCommand(obj)
     if err != nil {
         return 0, err
     }
@@ -566,10 +713,10 @@ func (mm *ModelManager) Update(obj interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(updateSQL)
+    l.SetCommand(updateCmd.Command)
     defer l.Close()
     // 执行插入操作
-    result, err := conn.Exec(updateSQL)
+    result, err := conn.Exec(updateCmd.Command, updateCmd.Values...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -581,7 +728,7 @@ func (mm *ModelManager) Update(obj interface{}) (int64, error) {
 // UpdateByCond 根据条件更新数据
 func (mm *ModelManager) UpdateByCond(params map[string]interface{}, cond interface{}) (int64, error) {
     // 构造更新语句
-    updateSQL, err := mm.BuildUpdateSqlByCond(params, cond)
+    updateCmd, err := mm.buildUpdateCommandByCond(params, cond)
     if err != nil {
         return 0, err
     }
@@ -592,10 +739,10 @@ func (mm *ModelManager) UpdateByCond(params map[string]interface{}, cond interfa
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(updateSQL)
+    l.SetCommand(updateCmd.Command)
     defer l.Close()
     // 执行更新操作
-    result, err := conn.Exec(updateSQL)
+    result, err := conn.Exec(updateCmd.Command, updateCmd.Values...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -607,7 +754,7 @@ func (mm *ModelManager) UpdateByCond(params map[string]interface{}, cond interfa
 // Delete 删除数据
 func (mm *ModelManager) Delete(cond interface{}) (int64, error) {
     // 构造删除语句
-    delSQL, err := mm.BuildDeleteSql(cond)
+    delCmd, err := mm.buildDeleteCommand(cond)
     if err != nil {
         return 0, err
     }
@@ -618,10 +765,10 @@ func (mm *ModelManager) Delete(cond interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(delSQL)
+    l.SetCommand(delCmd.Command)
     defer l.Close()
     // 执行删除操作
-    result, err := conn.Exec(delSQL)
+    result, err := conn.Exec(delCmd.Command, delCmd.Values...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -729,7 +876,7 @@ func (mm *ModelManager) FindAll(conds interface{}, orderBy string) ([]interface{
     return list, nil
 }
 
-// FindOne 查询单条数据
+// Count 数据统计
 func (mm *ModelManager) Count(conds interface{}) (int, error) {
     data, err := mm.NewQuerier().Select("COUNT(0)").From(mm.GetTableName()).Where(conds).QueryScalar()
     if err != nil {
@@ -738,7 +885,7 @@ func (mm *ModelManager) Count(conds interface{}) (int, error) {
     return strconv.Atoi(data)
 }
 
-// QueryRaw 根据SQL查询满足条件的全部数据
+// QueryAll 根据SQL查询满足条件的全部数据
 func (mm *ModelManager) QueryAll(querySql string) (*QueryResult, error) {
     queryRs, err := mm.NewRawQuerier(querySql).Query()
     if err != nil {

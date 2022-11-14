@@ -4,6 +4,26 @@ import (
     "database/sql"
 )
 
+type SqlCommand struct {
+    Command string
+    Values  []interface{}
+}
+
+func NewSqlCommand() *SqlCommand {
+    return &SqlCommand{
+        Command: "",
+        Values:  make([]interface{}, 0),
+    }
+}
+
+func (sc *SqlCommand) AddValue(v interface{}) {
+    sc.Values = append(sc.Values, v)
+}
+
+func (sc *SqlCommand) AddValues(v ...interface{}) {
+    sc.Values = append(sc.Values, v...)
+}
+
 // Commander 执行者，用于执行数据库查询等操作
 type Commander struct {
     inTrans  bool     // 是否在执行事务中
@@ -261,3 +281,9 @@ func (c *Commander) QueryScalar(command string, args ...interface{}) (string, er
     // 返回查询结果
     return data[firstColumn], nil
 }
+
+func (c *Commander) Insert(m Modeler) {}
+
+func (c *Commander) Update(m Modeler) {}
+
+func (c *Commander) Delete(m Modeler) {}
