@@ -1,27 +1,49 @@
 package gomodel
 
 import (
+    "bytes"
     "database/sql"
+    "fmt"
 )
 
 type SqlCommand struct {
-    Command string
-    Values  []interface{}
+    command bytes.Buffer
+    values  []interface{}
 }
 
 func NewSqlCommand() *SqlCommand {
     return &SqlCommand{
-        Command: "",
-        Values:  make([]interface{}, 0),
+        command: bytes.Buffer{},
+        values:  make([]interface{}, 0),
     }
 }
 
+func (sc *SqlCommand) Write(b []byte) {
+    sc.command.Write(b)
+}
+
+func (sc *SqlCommand) WriteString(s string) {
+    sc.command.WriteString(s)
+}
+
+func (sc *SqlCommand) Writef(f string, v ...interface{}) {
+    sc.command.WriteString(fmt.Sprintf(f, v...))
+}
+
 func (sc *SqlCommand) AddValue(v interface{}) {
-    sc.Values = append(sc.Values, v)
+    sc.values = append(sc.values, v)
 }
 
 func (sc *SqlCommand) AddValues(v ...interface{}) {
-    sc.Values = append(sc.Values, v...)
+    sc.values = append(sc.values, v...)
+}
+
+func (sc *SqlCommand) Command() string {
+    return sc.command.String()
+}
+
+func (sc *SqlCommand) Values() []interface{} {
+    return sc.values
 }
 
 // Commander 执行者，用于执行数据库查询等操作

@@ -444,129 +444,103 @@ func (mm *ModelManager) BuildDeleteSql(conds interface{}) (string, error) {
 
 // buildInsertCommand return insert command and values, this may be safer than buildInsertSql
 func (mm *ModelManager) buildInsertCommand(object interface{}) (*SqlCommand, error) {
-    // 类型检查与转换
     modelObj, ok := mm.convert2Model(object)
     if !ok {
         return nil, fmt.Errorf("insert action expect a %T object, but %T found", mm.Model, object)
     }
-    // 先获取字段列表
     insertFields := mm.getInsertFields()
-    insertCommand := fmt.Sprintf("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
-    // 构造插入数据
+    sqlCmd := NewSqlCommand()
+    sqlCmd.Writef("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
     valueMarks := make([]string, 0)
-    values := make([]interface{}, 0)
     rv := reflect.ValueOf(modelObj)
     for _, field := range insertFields {
         propName := mm.FieldMaps[field]
         val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
-        values = append(values, val)
+        sqlCmd.AddValue(val)
         valueMarks = append(valueMarks, "?")
     }
-    insertCommand += fmt.Sprintf("(%s)", strings.Join(valueMarks, ","))
-    return &SqlCommand{
-        Command: insertCommand,
-        Values:  values,
-    }, nil
+    sqlCmd.Writef("(%s)", strings.Join(valueMarks, ","))
+    return sqlCmd, nil
 }
 
 // buildBatchInsertCommand 构造批量插入语句
 func (mm *ModelManager) buildBatchInsertCommand(data interface{}) (*SqlCommand, error) {
-    if data == nil {
-        return nil, errors.New("can not insert nil data")
-    }
     objects, err := mm.parseModelers(data)
     if err != nil {
         return nil, err
     }
     // 先获取字段列表
     insertFields := mm.getInsertFields()
-    insertCommand := fmt.Sprintf("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
-    values := make([]interface{}, 0)
+    sqlCmd := NewSqlCommand()
+    sqlCmd.Writef("INSERT INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(insertFields, "`,`"))
     for i, object := range objects {
         valueMarks := make([]string, 0)
         rv := reflect.ValueOf(object)
         for _, field := range insertFields {
             propName := mm.FieldMaps[field]
             val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
-            values = append(values, val)
+            sqlCmd.AddValue(val)
             valueMarks = append(valueMarks, "?")
         }
         if i > 0 {
-            insertCommand += ","
+            sqlCmd.WriteString(",")
         }
-        insertCommand += fmt.Sprintf("(%s)", strings.Join(valueMarks, ","))
+        sqlCmd.Writef("(%s)", strings.Join(valueMarks, ","))
     }
-    return &SqlCommand{
-        Command: insertCommand,
-        Values:  values,
-    }, nil
+    return sqlCmd, nil
 }
 
 // buildReplaceIntoCommand 构造REPLACE INTO语句
 func (mm *ModelManager) buildReplaceIntoCommand(data interface{}) (*SqlCommand, error) {
-    if data == nil {
-        return nil, errors.New("can not replace into nil data")
-    }
     objects, err := mm.parseModelers(data)
     if err != nil {
         return nil, err
     }
-    // 先获取字段列表
     allFields := mm.Fields
-    values := make([]interface{}, 0)
-    replaceCommand := fmt.Sprintf("REPLACE INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(allFields, "`,`"))
+    sqlCmd := NewSqlCommand()
+    sqlCmd.Writef("REPLACE INTO %s(`%s`) VALUES", quote(mm.GetTableName()), strings.Join(allFields, "`,`"))
     for i, object := range objects {
         valueMarks := make([]string, 0)
         rv := reflect.ValueOf(object)
         for _, field := range allFields {
             propName := mm.FieldMaps[field]
             val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
-            values = append(values, val)
+            sqlCmd.AddValue(val)
             valueMarks = append(valueMarks, "?")
         }
         if i > 0 {
-            replaceCommand += ","
+            sqlCmd.WriteString(",")
         }
-        replaceCommand += fmt.Sprintf("(%s)", strings.Join(valueMarks, ","))
+        sqlCmd.Writef("(%s)", strings.Join(valueMarks, ","))
     }
-    return &SqlCommand{
-        Command: replaceCommand,
-        Values:  values,
-    }, nil
+    return sqlCmd, nil
 }
 
 // buildUpdateCommand 构造更新语句
 func (mm *ModelManager) buildUpdateCommand(object interface{}) (*SqlCommand, error) {
-    // 类型检查与转换
     modelObj, ok := mm.convert2Model(object)
     if !ok {
         return nil, fmt.Errorf("insert action expect a %T object, but %T found", mm.Model, object)
     }
-    // 先获取字段列表
     updateFields := mm.getInsertFields()
-    updateCmd := fmt.Sprintf("UPDATE `%s` SET ", mm.GetTableName())
-    // 构造更新数据
-    values := make([]interface{}, 0)
+    sqlCmd := NewSqlCommand()
+    sqlCmd.Writef("UPDATE `%s` SET ", mm.GetTableName())
     rv := reflect.ValueOf(modelObj)
     for i, field := range updateFields {
         if i > 0 {
-            updateCmd += ", "
+            sqlCmd.WriteString(", ")
         }
         propName := mm.FieldMaps[field]
         val := mm.GetSqlValue(field, rv.Elem().FieldByName(propName).Interface())
-        updateCmd += fmt.Sprintf(" `%s` = ?")
-        values = append(values, val)
+        sqlCmd.Writef(" `%s` = ?", field)
+        sqlCmd.AddValue(val)
     }
-    // 自增ID
     autoIncrementField := mm.Model.AutoIncrementField()
     propName := mm.FieldMaps[autoIncrementField]
     idVal := mm.GetSqlValue(autoIncrementField, rv.Elem().FieldByName(propName).Interface())
-    updateCmd += fmt.Sprintf(" WHERE `%s` = ? ", autoIncrementField)
-    values = append(values, idVal)
-    return &SqlCommand{
-        Command: updateCmd,
-        Values:  values,
-    }, nil
+    sqlCmd.Writef(" WHERE `%s` = ? ", autoIncrementField)
+    sqlCmd.AddValue(idVal)
+    return sqlCmd, nil
 }
 
 // buildUpdateCommandByCond 构造更新语句
@@ -582,28 +556,26 @@ func (mm *ModelManager) buildUpdateCommandByCond(params map[string]interface{}, 
         return nil, errors.New("update condition can not be empty")
     }
     // 构造更新语句
-    updateCmd := fmt.Sprintf("UPDATE `%s` SET ", mm.GetTableName())
+    sqlCmd := NewSqlCommand()
+    sqlCmd.Writef("UPDATE `%s` SET ", mm.GetTableName())
     counter := 0
-    values := make([]interface{}, 0)
     for field, iv := range params {
         if counter > 0 {
-            updateCmd += ", "
+            sqlCmd.WriteString(", ")
         }
         val := mm.GetSqlValue(field, iv)
-        values = append(values, val)
-        updateCmd += fmt.Sprintf(" `%s` = ?", field)
+        sqlCmd.AddValue(val)
+        sqlCmd.Writef(" `%s` = ?", field)
         counter++
     }
-    updateCmd += fmt.Sprintf(" WHERE %s ", where)
-    return &SqlCommand{
-        Command: updateCmd,
-        Values:  values,
-    }, nil
+    sqlCmd.Writef(" WHERE %s ", where)
+    return sqlCmd, nil
 }
 
 // buildDeleteCommand 构造删除语句
 func (mm *ModelManager) buildDeleteCommand(conds interface{}) (*SqlCommand, error) {
-    delCmd := fmt.Sprintf("DELETE FROM `%s` WHERE ", mm.GetTableName())
+    sqlCmd := NewSqlCommand()
+    sqlCmd.Writef("DELETE FROM `%s` WHERE ", mm.GetTableName())
     where, err := BuildCondition(conds)
     if err != nil {
         return nil, err
@@ -612,12 +584,8 @@ func (mm *ModelManager) buildDeleteCommand(conds interface{}) (*SqlCommand, erro
     if where == "" {
         return nil, fmt.Errorf("delete condition can not be empty")
     }
-    values := make([]interface{}, 0)
-    delCmd += where
-    return &SqlCommand{
-        Command: delCmd,
-        Values:  values,
-    }, nil
+    sqlCmd.WriteString(where)
+    return sqlCmd, nil
 }
 
 // Insert 插入一条新数据
@@ -634,10 +602,10 @@ func (mm *ModelManager) Insert(obj interface{}) (int64, error) {
     }
     // 执行插入操作
     l := NewLogger()
-    l.SetCommand(insertCmd.Command)
+    l.SetCommand(insertCmd.Command())
     defer l.Close()
     // 执行插入操作
-    result, err := conn.Exec(insertCmd.Command, insertCmd.Values...)
+    result, err := conn.Exec(insertCmd.Command(), insertCmd.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -660,10 +628,10 @@ func (mm *ModelManager) InsertBatch(objs interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(insertCmd.Command)
+    l.SetCommand(insertCmd.Command())
     defer l.Close()
     // 执行插入操作
-    _, err = conn.Exec(insertCmd.Command, insertCmd.Values...)
+    _, err = conn.Exec(insertCmd.Command(), insertCmd.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -686,10 +654,10 @@ func (mm *ModelManager) ReplaceInto(objs interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(replaceCmd.Command)
+    l.SetCommand(replaceCmd.Command())
     defer l.Close()
     // 执行插入操作
-    _, err = conn.Exec(replaceCmd.Command, replaceCmd.Values...)
+    _, err = conn.Exec(replaceCmd.Command(), replaceCmd.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -713,10 +681,10 @@ func (mm *ModelManager) Update(obj interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(updateCmd.Command)
+    l.SetCommand(updateCmd.Command())
     defer l.Close()
     // 执行插入操作
-    result, err := conn.Exec(updateCmd.Command, updateCmd.Values...)
+    result, err := conn.Exec(updateCmd.Command(), updateCmd.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -739,10 +707,10 @@ func (mm *ModelManager) UpdateByCond(params map[string]interface{}, cond interfa
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(updateCmd.Command)
+    l.SetCommand(updateCmd.Command())
     defer l.Close()
     // 执行更新操作
-    result, err := conn.Exec(updateCmd.Command, updateCmd.Values...)
+    result, err := conn.Exec(updateCmd.Command(), updateCmd.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
@@ -765,10 +733,10 @@ func (mm *ModelManager) Delete(cond interface{}) (int64, error) {
     }
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(delCmd.Command)
+    l.SetCommand(delCmd.Command())
     defer l.Close()
     // 执行删除操作
-    result, err := conn.Exec(delCmd.Command, delCmd.Values...)
+    result, err := conn.Exec(delCmd.Command(), delCmd.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return 0, err
