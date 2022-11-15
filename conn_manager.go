@@ -1,9 +1,9 @@
 package gomodel
 
 import (
+    "container/list"
     "database/sql"
     "fmt"
-    "github.com/whencome/xlog"
     "sync"
     "time"
 )
@@ -18,25 +18,75 @@ type DatabaseConfig struct {
     MaxIdles    int    `yaml:"max_idles" json:"max_idles"`       // 最大空闲连接数
 }
 
+// /////////////////// Connection Statistics ///////////////////////
+
+type ConnStat struct {
+    FirstFailTime int64
+    LastFailTime  int64
+    LastErr       error
+    DetectCount   int64
+    FailCount     int64
+}
+
+func (s *ConnStat) LogFail(err error) {
+    now := time.Now()
+    // 如果较上次失败持续时间长于指定时间，则忽略上次失败时间
+    // 超过5分钟则忽略上次失败
+    if now.Unix()-s.LastFailTime > 5*60 {
+        s.Reset()
+    }
+    // record fail info
+    if s.DetectCount == 0 {
+        s.FirstFailTime = now.Unix()
+    }
+    s.DetectCount++
+    s.FailCount++
+    s.LastFailTime = now.Unix()
+    s.LastErr = err
+}
+
+func (s *ConnStat) Reset() {
+    s.DetectCount = 0
+    s.FailCount = 0
+    s.FirstFailTime = 0
+    s.LastFailTime = 0
+}
+
+func (s *ConnStat) FailDuration() int64 {
+    return s.LastFailTime - s.FirstFailTime
+}
+
+func (s *ConnStat) FailTimes() int64 {
+    return s.FailCount
+}
+
+func (s *ConnStat) FailRate() float64 {
+    if s.DetectCount == 0 {
+        return 0
+    }
+    return float64(s.FailCount) / float64(s.DetectCount) * 100
+}
+
+// /////////////////// Connection Manager ///////////////////////
+
 // 创建一个链接管理器
-var connMgr = NewConnectionManager()
+var connMgr *ConnectionManager
 
 // ConnectionManager 连接管理器
 type ConnectionManager struct {
-    // 数据库配置列表
-    DBConfigs map[string]*DatabaseConfig
-    // 数据库连接列表
-    DBConns map[string]*sql.DB
-    // 锁
-    Locker sync.RWMutex
+    // 数据库配置列表 map[string]*DatabaseConfig
+    DBConfigs sync.Map
+    // 数据库连接列表 map[string]*sql.DB
+    DBConns    sync.Map
+    dirtyConns *list.List
+    // 数据库连接统计 map[string]*ConnStat
+    stats sync.Map
 }
 
 // NewConnectionManager 创建一个新的连接管理器
 func NewConnectionManager() *ConnectionManager {
     return &ConnectionManager{
-        DBConfigs: nil,
-        DBConns:   make(map[string]*sql.DB),
-        Locker:    sync.RWMutex{},
+        dirtyConns: list.New(),
     }
 }
 
@@ -45,39 +95,38 @@ func (m *ConnectionManager) initConfig(cfg *DatabaseConfig) {
     if cfg == nil {
         return
     }
-    m.Locker.Lock()
-    defer m.Locker.Unlock()
-    if _, ok := m.DBConfigs[cfg.Name]; ok {
-        if conn, ok := m.DBConns[cfg.Name]; ok {
-            _ = conn.Close()
-            delete(m.DBConns, cfg.Name)
+    _, ok := m.DBConfigs.Load(cfg.Name)
+    if ok {
+        _conn, ok := m.DBConns.Load(cfg.Name)
+        if ok {
+            conn := _conn.(*sql.DB)
+            m.dirtyConns.PushBack(conn)
+            m.DBConns.Delete(cfg.Name)
         }
     }
-    m.DBConfigs[cfg.Name] = cfg
+    m.DBConfigs.Store(cfg.Name, cfg)
     RegisterDBInitFunc(cfg.Name, GetConnection)
 }
 
 // getConnection 获取指定数据库的连接
 func (m *ConnectionManager) getConnection(dbName string) (*sql.DB, error) {
-    // 检查是否存在既有连接
-    m.Locker.RLock()
-    conn, ok := m.DBConns[dbName]
-    m.Locker.RUnlock()
+    _conn, ok := m.DBConns.Load(dbName)
     if ok {
+        conn := _conn.(*sql.DB)
         return conn, nil
     }
-    // 初始化数据库连接
     return m.initConnection(dbName)
 }
 
 // initConnection 初始化数据库连接
 func (m *ConnectionManager) initConnection(dbName string) (*sql.DB, error) {
-    // 初始化数据库连接
-    dbCfg, ok := m.DBConfigs[dbName]
+    // get database config
+    _dbCfg, ok := m.DBConfigs.Load(dbName)
     if !ok {
         return nil, fmt.Errorf("no avail config for db [%s]", dbName)
     }
-    // 连接数据库
+    dbCfg := _dbCfg.(*DatabaseConfig)
+    // open connections
     conn, err := sql.Open(dbCfg.Driver, dbCfg.DSN)
     if err != nil {
         return nil, err
@@ -86,29 +135,66 @@ func (m *ConnectionManager) initConnection(dbName string) (*sql.DB, error) {
     conn.SetConnMaxLifetime(time.Second * time.Duration(dbCfg.MaxLifeTime))
     conn.SetMaxOpenConns(dbCfg.MaxConns)
     conn.SetMaxIdleConns(dbCfg.MaxIdles)
-    // 加锁
-    m.Locker.Lock()
-    m.DBConns[dbName] = conn
-    m.Locker.Unlock()
-    // 返回连接信息
+    m.DBConns.Store(dbName, conn)
     return conn, nil
 }
 
 // Close close all established connections
 func (m *ConnectionManager) Close() {
-    if len(m.DBConns) <= 0 {
+    m.DBConns.Range(func(key, value any) bool {
+        conn := value.(*sql.DB)
+        m.dirtyConns.PushBack(conn)
+        m.DBConns.Delete(key)
+        return true
+    })
+}
+
+// CloseDB remove & close the given db connection
+func (m *ConnectionManager) CloseDB(dbName string) {
+    _conn, ok := m.DBConns.LoadAndDelete(dbName)
+    if !ok {
         return
     }
-    for name, db := range m.DBConns {
-        err := db.Close()
-        if err != nil {
-            xlog.Errorf("close db [%s] failed: %s", name, err)
+    conn := _conn.(*sql.DB)
+    m.dirtyConns.PushBack(conn)
+}
+
+func (m *ConnectionManager) watchConns() {
+    ticker := time.NewTicker(time.Second * 15)
+    for {
+        <-ticker.C
+        // remove dirty connections
+        if m.dirtyConns.Len() > 0 {
+            go func() {
+                for c := m.dirtyConns.Front(); c != nil; c.Next() {
+                    conn := c.Value.(*sql.DB)
+                    _ = conn.Close()
+                }
+            }()
         }
-        // 移除连接
-        delete(m.DBConns, name)
+        // check active connections
+        m.DBConns.Range(func(key, value any) bool {
+            conn := value.(*sql.DB)
+            err := conn.Ping()
+            if err == nil {
+                return true
+            }
+            var stat *ConnStat
+            _stat, ok := m.stats.Load(key)
+            if ok {
+                stat = _stat.(*ConnStat)
+                stat.LogFail(err)
+            } else {
+                stat = new(ConnStat)
+                stat.LogFail(err)
+            }
+            if stat.FailCount >= 8 && stat.FailRate() > 90 {
+                m.CloseDB(String(key))
+            }
+            m.stats.Store(key, stat)
+            return true
+        })
     }
-    // 将连接列表置为空
-    m.DBConns = make(map[string]*sql.DB)
 }
 
 // InitDB 初始化单个数据库配置
@@ -126,7 +212,7 @@ func InitDBs(cfgs []*DatabaseConfig) {
     }
 }
 
-// InitDBs 初始化数据库配置
+// InitMDBs 初始化数据库配置
 func InitMDBs(cfgs map[string]*DatabaseConfig) {
     if cfgs == nil || len(cfgs) == 0 {
         return
