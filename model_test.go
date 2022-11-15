@@ -76,7 +76,7 @@ type User struct {
     Name       string  `db:"name" json:"name"`
     Email      string  `db:"email" json:"email"`
     Mobile     string  `db:"mobile" json:"mobile"`
-    Track      []Point `json:"track"` // Error 1416: Cannot get geometry object from data you send to the GEOMETRY field
+    Track      []Point `db:"track" json:"track"`
     Gender     int     `db:"gender" json:"gender"`
     Stat       []byte  `db:"stat" json:"stat"`
     CreateTime int64   `db:"create_time" json:"create_time"`
@@ -124,15 +124,22 @@ func NewUserModel() *UserModel {
         return conn, nil
     })
     // 针对具体字段进行处理
-    m.SetValueCallback("email", func(v interface{}) interface{} {
+    m.SetValueCallback("email", func(v interface{}) (interface{}, bool) {
         _v := v.(string)
-        return strings.ReplaceAll(_v, "@", "#")
+        return strings.ReplaceAll(_v, "@", "#"), true
     })
-    m.SetValueCallback("stat", func(v interface{}) interface{} {
+    m.SetValueCallback("gender", func(v interface{}) (interface{}, bool) {
+        _v := v.(int)
+        if _v == 1 {
+            return "b'1'", false
+        }
+        return "b'0'", false
+    })
+    m.SetValueCallback("stat", func(v interface{}) (interface{}, bool) {
         _v := BytesToBinaryString(v.([]byte))
-        return fmt.Sprintf("b'%s'", _v)
+        return fmt.Sprintf("b'%s'", _v), false
     })
-    m.SetValueCallback("track", func(v interface{}) interface{} {
+    m.SetValueCallback("track", func(v interface{}) (interface{}, bool) {
         points := v.([]Point)
         lintPoints := &bytes.Buffer{}
         lintPoints.WriteString("LINESTRING(")
@@ -143,7 +150,7 @@ func NewUserModel() *UserModel {
             lintPoints.WriteString(fmt.Sprintf("%.6f %.6f", p.X, p.Y))
         }
         lintPoints.WriteString(")")
-        return fmt.Sprintf("GeoFromText('%s')", lintPoints)
+        return fmt.Sprintf("ST_GeomFromText('%s')", lintPoints), false
     })
     // 针对modeler写入前进行预处理
     m.SetPreWriteFunc(func(mod Modeler) Modeler {
@@ -158,10 +165,14 @@ func NewUserModel() *UserModel {
     })
     // 设置查询前的字段处理
     m.SetPreQueryFieldFunc(func(f string) string {
-        if f != "track" {
+        switch f {
+        case "track":
+            return fmt.Sprintf("ST_astext(%s) as %s", f, f)
+        case "gender":
+            return "(gender & b'1') AS gender"
+        default:
             return f
         }
-        return fmt.Sprintf("ST_astext(%s) as %s", f, f)
     })
     // 读取数据后进行处理
     m.SetPostReadFunc(func(mod Modeler, data map[string][]uint8) Modeler {

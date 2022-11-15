@@ -407,33 +407,6 @@ func (q *Querier) buildCountQueryFromRawQuery() (string, error) {
     return querySQL.String(), nil
 }
 
-// isBinaryValue 判断给定的值是否是二级制数据,这里只做简单判断
-func (q *Querier) isBinaryValue(v *[]uint8) bool {
-    bits := []byte(*v)
-    isBinary := true
-    for _, ascii := range bits {
-        if ascii >= 32 {
-            isBinary = false
-            break
-        }
-    }
-    return isBinary
-}
-
-// parseValue parse db value to readable value, this need some tricks to parse binary values
-func (q *Querier) parseValue(v *[]uint8) string {
-    if !q.isBinaryValue(v) {
-        return string(*v)
-    }
-    // 二进制数据，返回二进制字符串
-    buf := bytes.Buffer{}
-    bits := []byte(*v)
-    for _, bit := range bits {
-        buf.WriteString(fmt.Sprintf("%b", bit))
-    }
-    return buf.String()
-}
-
 // Query 执行查询,此处返回为切片，以保证返回值结果顺序与查询字段顺序一致
 func (q *Querier) Query() (*QueryResult, error) {
     // 构建查询
@@ -485,7 +458,11 @@ func (q *Querier) Query() (*QueryResult, error) {
         data := make(map[string]string)
         for i, v := range row {
             k := result.Columns[i]
-            data[k] = q.parseValue(v.(*[]uint8))
+            if v == nil {
+                data[k] = ""
+            } else {
+                data[k] = string(*(v.(*[]uint8)))
+            }
         }
         result.Rows = append(result.Rows, data)
         count++

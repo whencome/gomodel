@@ -41,7 +41,8 @@ type PostReadAdjustFunc func(Modeler, map[string][]uint8) Modeler
 // WriteValueAdjustFunc this is a hook function that will adjust the value write to db, such as geo data,
 // this function is seldom used, but when you needed, it's useful.
 // please attention: this function will only be called when you update a model to db.
-type WriteValueAdjustFunc func(interface{}) interface{}
+// bool result indicate whether the final value should be escaped or not, it's usually used to some special cases.
+type WriteValueAdjustFunc func(interface{}) (interface{}, bool)
 
 // QueryFieldAdjustFunc like SqlValueAdjustFunc, this function will adjust the query fields when query data from db.
 // this function of course seldom used, and of course useful only when you need.
@@ -50,8 +51,8 @@ type WriteValueAdjustFunc func(interface{}) interface{}
 type QueryFieldAdjustFunc func(string) string
 
 // DefaultValueCallback a default function to convert a given data, this function will be called before update a model data
-func DefaultValueCallback(v interface{}) interface{} {
-    return SQLRawValue(v)
+func DefaultValueCallback(v interface{}) (interface{}, bool) {
+    return SQLRawValue(v), true
 }
 
 // Manager define a manager interface
@@ -252,7 +253,7 @@ func (mm *ModelManager) GetValueCallback(f string) WriteValueAdjustFunc {
 }
 
 // GetValue 获取字段的值
-func (mm *ModelManager) GetValue(f string, v interface{}) interface{} {
+func (mm *ModelManager) GetValue(f string, v interface{}) (interface{}, bool) {
     vf := mm.GetValueCallback(f)
     return vf(v)
 }
@@ -322,7 +323,13 @@ func (mm *ModelManager) BuildBatchInsertSql(data interface{}) (string, error) {
         rv := reflect.ValueOf(object)
         for _, field := range insertFields {
             propName := mm.FieldMaps[field]
-            val := SQLValue(mm.GetValue(field, rv.Elem().FieldByName(propName).Interface()))
+            val := ""
+            _val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+            if esc {
+                val = SQLValue(_val)
+            } else {
+                val = String(_val)
+            }
             values = append(values, val)
         }
         if i > 0 {
@@ -348,7 +355,13 @@ func (mm *ModelManager) BuildInsertSql(object interface{}) (string, error) {
     rv := reflect.ValueOf(modelObj)
     for _, field := range insertFields {
         propName := mm.FieldMaps[field]
-        val := SQLValue(mm.GetValue(field, rv.Elem().FieldByName(propName).Interface()))
+        val := ""
+        _val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+        if esc {
+            val = SQLValue(_val)
+        } else {
+            val = String(_val)
+        }
         values = append(values, val)
     }
     insertSql += fmt.Sprintf("(%s)", strings.Join(values, ","))
@@ -372,7 +385,13 @@ func (mm *ModelManager) BuildReplaceIntoSql(data interface{}) (string, error) {
         rv := reflect.ValueOf(object)
         for _, field := range allFields {
             propName := mm.FieldMaps[field]
-            val := SQLValue(mm.GetValue(field, rv.Elem().FieldByName(propName).Interface()))
+            val := ""
+            _val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+            if esc {
+                val = SQLValue(_val)
+            } else {
+                val = String(_val)
+            }
             values = append(values, val)
         }
         if i > 0 {
@@ -397,7 +416,13 @@ func (mm *ModelManager) BuildUpdateSql(object interface{}) (string, error) {
     rv := reflect.ValueOf(modelObj)
     for i, field := range updateFields {
         propName := mm.FieldMaps[field]
-        val := SQLValue(mm.GetValue(field, rv.Elem().FieldByName(propName).Interface()))
+        val := ""
+        _val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+        if esc {
+            val = SQLValue(_val)
+        } else {
+            val = String(_val)
+        }
         if i > 0 {
             updateSQL += ", "
         }
@@ -406,7 +431,13 @@ func (mm *ModelManager) BuildUpdateSql(object interface{}) (string, error) {
     // 自增ID
     autoIncrementField := mm.Model.AutoIncrementField()
     propName := mm.FieldMaps[autoIncrementField]
-    idVal := SQLValue(mm.GetValue(autoIncrementField, rv.Elem().FieldByName(propName).Interface()))
+    _idVal, esc := mm.GetValue(autoIncrementField, rv.Elem().FieldByName(propName).Interface())
+    idVal := ""
+    if esc {
+        idVal = SQLValue(_idVal)
+    } else {
+        idVal = String(_idVal)
+    }
     updateSQL += fmt.Sprintf(" WHERE `%s` = %s ", autoIncrementField, idVal)
     return updateSQL, nil
 }
@@ -427,7 +458,13 @@ func (mm *ModelManager) BuildUpdateSqlByCond(params map[string]interface{}, cond
     updateSQL := fmt.Sprintf("UPDATE `%s` SET ", mm.GetTableName())
     counter := 0
     for field, iv := range params {
-        val := SQLValue(mm.GetValue(field, iv))
+        val := ""
+        _val, esc := mm.GetValue(field, iv)
+        if esc {
+            val = SQLValue(_val)
+        } else {
+            val = String(_val)
+        }
         if counter > 0 {
             updateSQL += ", "
         }
@@ -466,9 +503,13 @@ func (mm *ModelManager) buildInsertCommand(object interface{}) (*SqlCommand, err
     rv := reflect.ValueOf(modelObj)
     for _, field := range insertFields {
         propName := mm.FieldMaps[field]
-        val := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
-        sqlCmd.AddValue(val)
-        valueMarks = append(valueMarks, "?")
+        val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+        if !esc {
+            valueMarks = append(valueMarks, String(val))
+        } else {
+            sqlCmd.AddValue(val)
+            valueMarks = append(valueMarks, "?")
+        }
     }
     sqlCmd.Writef("(%s)", strings.Join(valueMarks, ","))
     return sqlCmd, nil
@@ -489,9 +530,13 @@ func (mm *ModelManager) buildBatchInsertCommand(data interface{}) (*SqlCommand, 
         rv := reflect.ValueOf(object)
         for _, field := range insertFields {
             propName := mm.FieldMaps[field]
-            val := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
-            sqlCmd.AddValue(val)
-            valueMarks = append(valueMarks, "?")
+            val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+            if !esc {
+                valueMarks = append(valueMarks, String(val))
+            } else {
+                sqlCmd.AddValue(val)
+                valueMarks = append(valueMarks, "?")
+            }
         }
         if i > 0 {
             sqlCmd.WriteString(",")
@@ -515,9 +560,13 @@ func (mm *ModelManager) buildReplaceIntoCommand(data interface{}) (*SqlCommand, 
         rv := reflect.ValueOf(object)
         for _, field := range allFields {
             propName := mm.FieldMaps[field]
-            val := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
-            sqlCmd.AddValue(val)
-            valueMarks = append(valueMarks, "?")
+            val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+            if !esc {
+                valueMarks = append(valueMarks, String(val))
+            } else {
+                sqlCmd.AddValue(val)
+                valueMarks = append(valueMarks, "?")
+            }
         }
         if i > 0 {
             sqlCmd.WriteString(",")
@@ -542,15 +591,23 @@ func (mm *ModelManager) buildUpdateCommand(object interface{}) (*SqlCommand, err
             sqlCmd.WriteString(", ")
         }
         propName := mm.FieldMaps[field]
-        val := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
-        sqlCmd.Writef(" `%s` = ?", field)
-        sqlCmd.AddValue(val)
+        val, esc := mm.GetValue(field, rv.Elem().FieldByName(propName).Interface())
+        if !esc {
+            sqlCmd.Writef(" `%s` = %s", field, String(val))
+        } else {
+            sqlCmd.Writef(" `%s` = ?", field)
+            sqlCmd.AddValue(val)
+        }
     }
     autoIncrementField := mm.Model.AutoIncrementField()
     propName := mm.FieldMaps[autoIncrementField]
-    idVal := mm.GetValue(autoIncrementField, rv.Elem().FieldByName(propName).Interface())
-    sqlCmd.Writef(" WHERE `%s` = ? ", autoIncrementField)
-    sqlCmd.AddValue(idVal)
+    idVal, esc := mm.GetValue(autoIncrementField, rv.Elem().FieldByName(propName).Interface())
+    if !esc {
+        sqlCmd.Writef(" WHERE `%s` = %s ", autoIncrementField, String(idVal))
+    } else {
+        sqlCmd.Writef(" WHERE `%s` = ? ", autoIncrementField)
+        sqlCmd.AddValue(idVal)
+    }
     return sqlCmd, nil
 }
 
@@ -574,9 +631,13 @@ func (mm *ModelManager) buildUpdateCommandByCond(params map[string]interface{}, 
         if counter > 0 {
             sqlCmd.WriteString(", ")
         }
-        val := mm.GetValue(field, iv)
-        sqlCmd.AddValue(val)
-        sqlCmd.Writef(" `%s` = ?", field)
+        val, esc := mm.GetValue(field, iv)
+        if !esc {
+            sqlCmd.Writef(" `%s` = %s", field, String(val))
+        } else {
+            sqlCmd.AddValue(val)
+            sqlCmd.Writef(" `%s` = ?", field)
+        }
         counter++
     }
     sqlCmd.Writef(" WHERE %s ", where)
