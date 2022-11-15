@@ -27,6 +27,45 @@ CREATE TABLE `user` (
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8;
 */
 
+// appendBinaryString & BytesToBinaryString see https://github.com/imroc/biu
+
+const (
+    zero  = byte('0')
+    one   = byte('1')
+    lsb   = byte('[') // left square brackets
+    rsb   = byte(']') // right square brackets
+    space = byte(' ')
+)
+
+// append bytes of string in binary format.
+func appendBinaryString(bs []byte, b byte) []byte {
+    var a byte
+    for i := 0; i < 8; i++ {
+        a = b
+        b <<= 1
+        b >>= 1
+        switch a {
+        case b:
+            bs = append(bs, zero)
+        default:
+            bs = append(bs, one)
+        }
+        b <<= 1
+    }
+    return bs
+}
+
+// BytesToBinaryString get the string in binary format of a []byte or []int8.
+func BytesToBinaryString(bs []byte) string {
+    l := len(bs)
+    bl := l*8 + l + 1
+    buf := make([]byte, 0, bl)
+    for _, b := range bs {
+        buf = appendBinaryString(buf, b)
+    }
+    return string(buf)
+}
+
 type Point struct {
     X float64
     Y float64
@@ -39,7 +78,7 @@ type User struct {
     Mobile     string  `db:"mobile" json:"mobile"`
     Track      []Point `json:"track"` // Error 1416: Cannot get geometry object from data you send to the GEOMETRY field
     Gender     int     `db:"gender" json:"gender"`
-    Stat       string  `db:"stat" json:"stat"`
+    Stat       []byte  `db:"stat" json:"stat"`
     CreateTime int64   `db:"create_time" json:"create_time"`
     UpdateTime int64   `db:"update_time" json:"update_time"`
 }
@@ -89,6 +128,10 @@ func NewUserModel() *UserModel {
         _v := v.(string)
         return strings.ReplaceAll(_v, "@", "#")
     })
+    m.SetValueCallback("stat", func(v interface{}) interface{} {
+        _v := BytesToBinaryString(v.([]byte))
+        return fmt.Sprintf("b'%s'", _v)
+    })
     m.SetValueCallback("track", func(v interface{}) interface{} {
         points := v.([]Point)
         lintPoints := &bytes.Buffer{}
@@ -127,6 +170,8 @@ func NewUserModel() *UserModel {
         u.Mobile = u.Mobile[:3] + "****" + u.Mobile[8:]
         // 对email进行还原
         u.Email = strings.ReplaceAll(u.Email, "#", "@")
+        // stat is binary array
+        u.Stat = data["stat"]
         // 解析轨迹
         _line, ok := data["track"]
         if ok {
@@ -159,6 +204,7 @@ var u *User = &User{
     Email:  "jack.smith@unknownsite.com",
     Mobile: "12345678900",
     Gender: 1,
+    Stat:   []byte{'1'},
     Track: []Point{
         {X: 121.474, Y: 31.2345},
         {X: 121.472, Y: 31.2333},
