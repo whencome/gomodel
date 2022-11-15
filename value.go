@@ -10,10 +10,10 @@ import (
 )
 
 // 定义数据表特殊字符替换映射表
-var sqlSpecialCharMaps = []map[string]string {
-    {"old":`\`, "new":`\\`},
-    {"old":`'`, "new":`\'`},
-    {"old":`"`, "new":`\"`},
+var sqlSpecialCharMaps = []map[string]string{
+    {"old": `\`, "new": `\\`},
+    {"old": `'`, "new": `\'`},
+    {"old": `"`, "new": `\"`},
 }
 
 // EscapeSqlValue 转义数据库中的特殊字符，暂时只处理常见内容
@@ -29,12 +29,10 @@ func EscapeSqlValue(str string) string {
     return str
 }
 
-// Value 定义一个通用的Value结构体，用于统一处理类型转换
 type Value struct {
     Data interface{}
 }
 
-// NewValue Create a new *Value
 func NewValue(val interface{}) *Value {
     return &Value{
         Data: val,
@@ -107,6 +105,27 @@ func (val *Value) SQLValue() string {
     }
     // 返回结果
     return strVal
+}
+
+// SQLRawValue get an unquoted sql value
+func (val *Value) SQLRawValue() interface{} {
+    var v interface{}
+    switch val.Data.(type) {
+    case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, string:
+        return val.Data
+    case []byte:
+        v = fmt.Sprintf("%s", EscapeSqlValue(string(val.Data.([]byte))))
+    case []rune:
+        v = fmt.Sprintf("%s", EscapeSqlValue(string(val.Data.([]rune))))
+    case bool:
+        v = 0
+        if val.Data.(bool) {
+            v = 1
+        }
+    default:
+        v = fmt.Sprintf("%s", EscapeSqlValue(fmt.Sprint(val.Data)))
+    }
+    return v
 }
 
 // Int64 get int64 value
@@ -287,4 +306,44 @@ func (val *Value) Boolean() bool {
         return true
     }
     return false
+}
+
+func SQLValue(v interface{}) string {
+    return NewValue(v).SQLValue()
+}
+
+func SQLRawValue(v interface{}) interface{} {
+    return NewValue(v).SQLRawValue()
+}
+
+func String(v interface{}) string {
+    return NewValue(v).String()
+}
+
+func Int(v interface{}) int {
+    return int(NewValue(v).Int64())
+}
+
+func Int64(v interface{}) int64 {
+    return NewValue(v).Int64()
+}
+
+func Uint(v interface{}) uint {
+    return uint(NewValue(v).Uint64())
+}
+
+func Uint64(v interface{}) uint64 {
+    return NewValue(v).Uint64()
+}
+
+func Float32(v interface{}) float32 {
+    return float32(NewValue(v).Float64())
+}
+
+func Float64(v interface{}) float64 {
+    return NewValue(v).Float64()
+}
+
+func Bool(v interface{}) bool {
+    return NewValue(v).Boolean()
 }

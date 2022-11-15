@@ -55,6 +55,7 @@ func newLeftJoinTable(tblName string, onCond string) *joinTable {
 /************************************************************
  ******             SECTION OF QUERY RESULT             *****
  ************************************************************/
+
 // QueryResult 保存一个查询结果（不支持分页）
 type QueryResult struct {
     TotalCount int                 // 记录总数
@@ -75,9 +76,29 @@ func NewQueryResult() *QueryResult {
     }
 }
 
+// RawQueryResult same as QueryResult, but the result data will not be force converted to string
+type RawQueryResult struct {
+    TotalCount int                  // 记录总数
+    Offset     int                  // 偏移量，用于分页处理
+    RowsCount  int                  // 当前查询的记录数量
+    Columns    []string             // 用于单独保存字段，以解决显示结果字段顺序不正确的问题
+    Rows       []map[string][]uint8 // 查询结果，一切皆字符串
+}
+
+func NewRawQueryResult() *RawQueryResult {
+    return &RawQueryResult{
+        TotalCount: 0,
+        Offset:     0,
+        RowsCount:  0,
+        Columns:    make([]string, 0),
+        Rows:       make([]map[string][]uint8, 0),
+    }
+}
+
 /************************************************************
  ******                SECTION OF QUERIER               *****
  ************************************************************/
+
 // Querier 查询对象
 type Querier struct {
     queryMaps  map[string]interface{}
@@ -588,6 +609,129 @@ func (q *Querier) QueryAssoc(field string) (map[string]map[string]string, error)
             continue
         }
         result[v] = row
+    }
+    return result, nil
+}
+
+// RawQuery 执行查询,此处返回为切片，以保证返回值结果顺序与查询字段顺序一致
+func (q *Querier) RawQuery() (*RawQueryResult, error) {
+    // 构建查询
+    err := q.buildQuery()
+    if err != nil {
+        return nil, err
+    }
+    // 执行查询前的检查
+    err = q.doPreQueryCheck()
+    if err != nil {
+        return nil, err
+    }
+    // 执行查询
+    result := NewRawQueryResult()
+
+    // 获取日志对象
+    l := NewLogger()
+    l.SetCommand(q.QuerySQL)
+    defer l.Close()
+
+    // 执行查询
+    rows, err := q.conn.Query(q.QuerySQL)
+    if err != nil {
+        l.Fail(err.Error())
+        return nil, err
+    }
+    l.Success()
+
+    // 读取数据
+    result.Columns, err = rows.Columns()
+    if err != nil {
+        return nil, err
+    }
+    // 创建临时切片用于保存数据
+    row := make([]interface{}, len(result.Columns))
+    // 创建存储数据的字节切片2维数组data
+    tmpData := make([][]byte, len(result.Columns))
+    for i, _ := range row {
+        // 将字节切片地址赋值给临时切片,这样row才是真正存放数据
+        row[i] = &tmpData[i]
+    }
+    // 开始读取数据
+    count := 0
+    for rows.Next() {
+        err = rows.Scan(row...)
+        if err != nil {
+            return nil, err
+        }
+        data := make(map[string][]uint8)
+        for i, v := range row {
+            k := result.Columns[i]
+            data[k] = *(v.(*[]uint8))
+        }
+        result.Rows = append(result.Rows, data)
+        count++
+    }
+    result.TotalCount = count
+    result.RowsCount = count
+    // 返回查询结果
+    return result, nil
+}
+
+// RawQueryRow 查询单条记录
+func (q *Querier) RawQueryRow() (map[string][]uint8, error) {
+    q.Limit(1)
+    queryResult, err := q.RawQuery()
+    if err != nil {
+        return nil, err
+    }
+    if queryResult.RowsCount == 0 {
+        return nil, nil
+    }
+    return queryResult.Rows[0], nil
+}
+
+// RawQueryScalar 查询单个值
+func (q *Querier) RawQueryScalar() ([]uint8, error) {
+    queryResult, err := q.RawQuery()
+    if err != nil {
+        return nil, err
+    }
+    if queryResult.RowsCount == 0 ||
+        len(queryResult.Columns) == 0 {
+        return nil, nil
+    }
+    firstField := queryResult.Columns[0]
+    v, _ := queryResult.Rows[0][firstField]
+    return v, nil
+}
+
+// RawQueryAll 查询全部记录
+func (q *Querier) RawQueryAll() ([]map[string][]uint8, error) {
+    queryResult, err := q.RawQuery()
+    if err != nil {
+        return nil, err
+    }
+    if queryResult.RowsCount == 0 {
+        return nil, nil
+    }
+    return queryResult.Rows, nil
+}
+
+// RawQueryAssoc 查询全部记录并以自定field为键返回对应的map
+func (q *Querier) RawQueryAssoc(field string) (map[string]map[string][]uint8, error) {
+    queryResult, err := q.RawQuery()
+    if err != nil {
+        return nil, err
+    }
+    if queryResult.RowsCount == 0 {
+        return nil, nil
+    }
+    result := make(map[string]map[string][]uint8)
+    for _, row := range queryResult.Rows {
+        v, ok := row[field]
+        if !ok {
+            continue
+        }
+        k := String(v)
+        result[k] = row
     }
     return result, nil
 }

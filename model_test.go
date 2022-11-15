@@ -9,6 +9,7 @@ import (
     "time"
 
     _ "github.com/go-sql-driver/mysql"
+    "github.com/whencome/xlog"
 )
 
 /**
@@ -36,7 +37,7 @@ type User struct {
     Name       string  `db:"name" json:"name"`
     Email      string  `db:"email" json:"email"`
     Mobile     string  `db:"mobile" json:"mobile"`
-    Track      []Point `db:"track" json:"track"`
+    Track      []Point `json:"track"` // Error 1416: Cannot get geometry object from data you send to the GEOMETRY field
     Gender     int     `db:"gender" json:"gender"`
     Stat       string  `db:"stat" json:"stat"`
     CreateTime int64   `db:"create_time" json:"create_time"`
@@ -84,11 +85,11 @@ func NewUserModel() *UserModel {
         return conn, nil
     })
     // 针对具体字段进行处理
-    m.SetSqlValueCallback("email", func(v interface{}) string {
+    m.SetValueCallback("email", func(v interface{}) interface{} {
         _v := v.(string)
-        return "'" + strings.ReplaceAll(_v, "@", "#") + "'"
+        return strings.ReplaceAll(_v, "@", "#")
     })
-    m.SetSqlValueCallback("track", func(v interface{}) string {
+    m.SetValueCallback("track", func(v interface{}) interface{} {
         points := v.([]Point)
         lintPoints := &bytes.Buffer{}
         lintPoints.WriteString("LINESTRING(")
@@ -99,15 +100,15 @@ func NewUserModel() *UserModel {
             lintPoints.WriteString(fmt.Sprintf("%.6f %.6f", p.X, p.Y))
         }
         lintPoints.WriteString(")")
-        return fmt.Sprintf("ST_GeomFromText('%s')", lintPoints)
+        return fmt.Sprintf("GeoFromText('%s')", lintPoints)
     })
     // 针对modeler写入前进行预处理
     m.SetPreWriteFunc(func(mod Modeler) Modeler {
         u := mod.(*User)
-        if u.ID == 0 {
+        if u.CreateTime == 0 {
             u.CreateTime = time.Now().Unix()
         }
-        if u.UpdateTime <= 0 {
+        if u.UpdateTime == 0 {
             u.UpdateTime = time.Now().Unix()
         }
         return u
@@ -120,15 +121,16 @@ func NewUserModel() *UserModel {
         return fmt.Sprintf("ST_astext(%s) as %s", f, f)
     })
     // 读取数据后进行处理
-    m.SetPostReadFunc(func(mod Modeler, data map[string]string) Modeler {
+    m.SetPostReadFunc(func(mod Modeler, data map[string][]uint8) Modeler {
         u := mod.(*User)
         // 对手机号进行打马
         u.Mobile = u.Mobile[:3] + "****" + u.Mobile[8:]
         // 对email进行还原
         u.Email = strings.ReplaceAll(u.Email, "#", "@")
         // 解析轨迹
-        line, ok := data["track"]
+        _line, ok := data["track"]
         if ok {
+            line := string(_line)
             line = strings.ReplaceAll(line, "LINESTRING(", "")
             line = strings.ReplaceAll(line, ")", "")
             parts := strings.Split(line, ",")
@@ -156,6 +158,7 @@ var u *User = &User{
     Name:   "Jack Smith",
     Email:  "jack.smith@unknownsite.com",
     Mobile: "12345678900",
+    Gender: 1,
     Track: []Point{
         {X: 121.474, Y: 31.2345},
         {X: 121.472, Y: 31.2333},
@@ -187,6 +190,7 @@ func TestModelManager_BuildUpdateSql(t *testing.T) {
 
 // 测试插入数据
 func TestModelManager_Insert(t *testing.T) {
+    xlog.Register("db", xlog.DefaultConfig())
     m := NewUserModel()
     id, e := m.Insert(u)
     if e != nil {
@@ -210,7 +214,7 @@ func TestModelManager_FindOne(t *testing.T) {
 }
 
 // 测试构造条件
-func TestCondition_AddRaw(t *testing.T) {
+func TestCondition_OrCondition(t *testing.T) {
     m := NewUserModel()
     conds := m.NewOrCondition()
     conds.Add("id", 2)
