@@ -18,6 +18,21 @@ func NewSqlCommand() *SqlCommand {
     }
 }
 
+func (sc *SqlCommand) IsEmpty() bool {
+    if sc.command.Len() > 0 {
+        return false
+    }
+    return true
+}
+
+func (sc *SqlCommand) Add(cmd *SqlCommand) {
+    if cmd == nil {
+        return
+    }
+    sc.Write(cmd.command.Bytes())
+    sc.values = append(sc.values, cmd.values...)
+}
+
 func (sc *SqlCommand) Write(b []byte) {
     sc.command.Write(b)
 }

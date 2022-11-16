@@ -33,6 +33,7 @@ func TestConditionCommandBuilder_Build(t *testing.T) {
     cond.Add("name", "whencome")
     cond.Add("age", 18)
     cond.AddRaw("score > 80")
+    cond.Add("score1 IN", []int{60, 70, 80, 90})
     cond.AddRawf("book_name like '%s'", "golang")
     orCond := NewOrCondition()
     orCond.Add("hobbies", "basketball")

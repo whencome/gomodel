@@ -2,6 +2,7 @@ package gomodel
 
 import (
     "database/sql"
+    "github.com/whencome/xlog"
     "testing"
 )
 
@@ -18,7 +19,7 @@ CREATE TABLE `user` (
   `stat` bit(30) NOT NULL,
   PRIMARY KEY (`id`) USING BTREE
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8;
- */
+*/
 
 func getConn() (*sql.DB, error) {
     // 连接数据库
@@ -42,6 +43,50 @@ func TestQuerier_QueryAll(t *testing.T) {
     q := NewRawQuerier(query)
     q.conn = conn
     rs, err := q.QueryAll()
+    if err != nil {
+        t.Logf("get connection failed: %s", err)
+        t.Fail()
+    }
+    t.Logf("result: %+v", rs)
+}
+
+func TestQuerier_QueryByCond(t *testing.T) {
+    xlog.Register("db", xlog.DefaultConfig())
+    conn, err := getConn()
+    if err != nil {
+        t.Logf("get connection failed: %s", err)
+        t.Fail()
+    }
+
+    // condition
+    cond := NewAndCondition()
+    cond.Add("id IN", []int{3, 4, 5, 6})
+
+    // build query
+    q := NewQuerier()
+    q.Connect(conn)
+    q.From("user")
+    q.Where(cond)
+    rs, err := q.QueryAll()
+    if err != nil {
+        t.Logf("get connection failed: %s", err)
+        t.Fail()
+    }
+    t.Logf("result: %+v", rs)
+}
+
+func TestQuerier_QuerWithParam(t *testing.T) {
+    xlog.Register("db", xlog.DefaultConfig())
+    conn, err := getConn()
+    if err != nil {
+        t.Logf("get connection failed: %s", err)
+        t.Fail()
+    }
+
+    // build query
+    q := NewRawQuerier("SELECT * FROM `user` WHERE id = ?", 4)
+    q.Connect(conn)
+    rs, err := q.QueryRow()
     if err != nil {
         t.Logf("get connection failed: %s", err)
         t.Fail()

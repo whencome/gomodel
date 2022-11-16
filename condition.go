@@ -320,10 +320,7 @@ func (cb *ConditionCommandBuilder) addSQLCommand(logic string, sqlCommand *SqlCo
         cb.WriteString(logic)
         cb.WriteString(" ")
     }
-    cb.WriteString(sqlCommand.Command())
-    if len(sqlCommand.values) > 0 {
-        cb.AddValues(sqlCommand.values...)
-    }
+    cb.Add(sqlCommand)
 }
 
 func (cb *ConditionCommandBuilder) addCommandBuilder(logic string, builder *ConditionCommandBuilder) {
@@ -467,6 +464,9 @@ func (cb *ConditionCommandBuilder) buildMatchLogicQuery(field, matchLogic string
         condCmd.Writef("%s %s ?", quote(field), matchLogic)
         condCmd.AddValue(fieldValue)
         return condCmd, nil
+    // when you use : select * from a_table where field_name in (?),
+    // you give 3,4,5,6 as the param, it will be treated as a string "3,4,5,6",
+    // then you probably will not get what you want. so, we will make the query condition literally.
     case "IN", "NOT IN":
         inVales := transValue2Array(value)
         if len(inVales) == 0 {
@@ -477,8 +477,7 @@ func (cb *ConditionCommandBuilder) buildMatchLogicQuery(field, matchLogic string
             vv := NewValue(v).SQLValue()
             fieldValues = append(fieldValues, vv)
         }
-        condCmd.Writef("%s %s (?)", quote(field), matchLogic)
-        condCmd.AddValue(strings.Join(fieldValues, ","))
+        condCmd.Writef("%s %s (%s)", quote(field), matchLogic, strings.Join(fieldValues, ","))
         return condCmd, nil
     case "BETWEEN", "NOT BETWEEN":
         betweenVales := transValue2Array(value)

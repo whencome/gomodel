@@ -103,9 +103,10 @@ func NewRawQueryResult() *RawQueryResult {
 type Querier struct {
     queryMaps  map[string]interface{}
     joinTables []*joinTable // 联表信息
-    QuerySQL   string       // 查询SQL
-    Settings   *Options     // 是否开启查询前的SQL语法检测
-    conn       *sql.DB      // 数据库连接
+    QuerySQL   *SqlCommand  // 查询SQL
+    isRaw      bool
+    Settings   *Options // 是否开启查询前的SQL语法检测
+    conn       *sql.DB  // 数据库连接
 }
 
 // NewQuerier 创建一个空的Querier
@@ -123,16 +124,22 @@ func NewQuerier() *Querier {
             "limit":       -1,
         },
         joinTables: make([]*joinTable, 0),
-        QuerySQL:   "",
+        QuerySQL:   NewSqlCommand(),
+        isRaw:      false,
         conn:       nil,
         Settings:   NewDefaultOptions(), // 设置一个默认参数配置
     }
 }
 
 // NewRawQuerier 根据查询SQL创建一个Querier
-func NewRawQuerier(querySQL string) *Querier {
+func NewRawQuerier(querySQL string, values ...interface{}) *Querier {
     q := NewQuerier()
-    q.QuerySQL = querySQL
+    q.isRaw = true
+    q.QuerySQL = NewSqlCommand()
+    q.QuerySQL.WriteString(querySQL)
+    if len(values) > 0 {
+        q.QuerySQL.AddValues(values...)
+    }
     return q
 }
 
@@ -248,22 +255,17 @@ func (q *Querier) Limit(num int) *Querier {
 }
 
 // buildCondition 构造查询条件
-func (q *Querier) buildCondition() (string, error) {
+func (q *Querier) buildCondition() (*SqlCommand, error) {
     where, ok := q.queryMaps["where"]
     if !ok || where == nil {
-        return "", nil
+        return nil, nil
     }
-    // 根据类型采取不同的构建方式
-    condWhere, ok := where.(*Condition)
-    if ok {
-        return condWhere.Build()
-    }
-    return NewConditionBuilder().Build(q.queryMaps["where"], "AND")
+    return NewConditionCommandBuilder().Build(where, LogicAnd)
 }
 
 // buildNoLimitQuery 构造没有limit的查询语句
-func (q *Querier) buildNoLimitQuery() (string, error) {
-    querySQL := bytes.Buffer{}
+func (q *Querier) buildNoLimitQuery() (*SqlCommand, error) {
+    querySQL := NewSqlCommand()
     querySQL.WriteString("SELECT ")
 
     // 查询字段
@@ -274,9 +276,9 @@ func (q *Querier) buildNoLimitQuery() (string, error) {
     querySQL.WriteString(fields)
 
     // 表
-    tableName := NewValue(q.queryMaps["table"]).String()
+    tableName := String(q.queryMaps["table"])
     if tableName == "" {
-        return "", errors.New("query table not specified")
+        return nil, errors.New("query table not specified")
     }
     querySQL.WriteString(" FROM ")
     querySQL.WriteString(quote(tableName))
@@ -285,10 +287,10 @@ func (q *Querier) buildNoLimitQuery() (string, error) {
     if len(q.joinTables) > 0 {
         for _, joinTbl := range q.joinTables {
             if strings.TrimSpace(joinTbl.table) == "" {
-                return "", errors.New("empty join table name")
+                return nil, errors.New("empty join table name")
             }
             if strings.TrimSpace(joinTbl.condition) == "" {
-                return "", errors.New("join condition empty")
+                return nil, errors.New("join condition empty")
             }
             querySQL.WriteString(" ")
             querySQL.WriteString(joinTbl.joinType)
@@ -302,11 +304,11 @@ func (q *Querier) buildNoLimitQuery() (string, error) {
     // 查询条件
     condition, err := q.buildCondition()
     if err != nil {
-        return "", err
+        return nil, err
     }
-    if condition != "" {
+    if condition != nil {
         querySQL.WriteString(" WHERE ")
-        querySQL.WriteString(condition)
+        querySQL.Add(condition)
     }
 
     // 检查是否对查询进行分组
@@ -315,55 +317,48 @@ func (q *Querier) buildNoLimitQuery() (string, error) {
         querySQL.WriteString(" GROUP BY ")
         querySQL.WriteString(groupBy)
         // 检查是否有分组过滤
-        having, err := NewConditionBuilder().Build(q.queryMaps["having"], "AND")
+        having, err := NewConditionCommandBuilder().Build(q.queryMaps["having"], "AND")
         if err != nil {
-            return "", err
+            return nil, err
         }
-        if having != "" {
+        if having != nil {
             querySQL.WriteString(" HAVING ")
-            querySQL.WriteString(having)
+            querySQL.Add(having)
         }
     }
 
     // 设置排序
-    orderBy := NewValue(q.queryMaps["order_by"]).String()
+    orderBy := String(q.queryMaps["order_by"])
     if orderBy != "" {
         querySQL.WriteString(" ORDER BY ")
         querySQL.WriteString(orderBy)
     }
-    return querySQL.String(), nil
+    return querySQL, nil
 }
 
 // buildQuery 构造查询语句
 func (q *Querier) buildQuery() error {
-    if q.QuerySQL != "" {
+    if !q.QuerySQL.IsEmpty() {
         return nil
     }
-    querySQL := bytes.Buffer{}
-
-    // 构造没有limit的查询
-    noLimitQuery, err := q.buildNoLimitQuery()
+    querySQL, err := q.buildNoLimitQuery()
     if err != nil {
         return err
     }
-    querySQL.WriteString(noLimitQuery)
-
     // 设置limit信息
     offset := Int64(q.queryMaps["offset"])
     limitNum := Int64(q.queryMaps["limit"])
     if limitNum > 0 {
         querySQL.WriteString(fmt.Sprintf(" LIMIT %d, %d", offset, limitNum))
     }
-
-    // 返回查询SQL
-    q.QuerySQL = querySQL.String()
+    q.QuerySQL = querySQL
     return nil
 }
 
 // buildCountQuery 构造count查询语句，用于统计查询数据的数量
-func (q *Querier) buildCountQuery() (string, error) {
+func (q *Querier) buildCountQuery() (*SqlCommand, error) {
     // 根据原始查询语句构造Count语句
-    if q.QuerySQL != "" && q.queryMaps["where"] == nil {
+    if q.isRaw && !q.QuerySQL.IsEmpty() && q.queryMaps["where"] == nil {
         return q.buildCountQueryFromRawQuery()
     }
     // 根据条件构造Count语句
@@ -371,30 +366,31 @@ func (q *Querier) buildCountQuery() (string, error) {
 }
 
 // buildCountQueryFromConditions 根据条件构造count语句
-func (q *Querier) buildCountQueryFromConditions() (string, error) {
+func (q *Querier) buildCountQueryFromConditions() (*SqlCommand, error) {
     noLimitQuery, err := q.buildNoLimitQuery()
     if err != nil {
-        return "", err
+        return nil, err
     }
-    querySQL := bytes.Buffer{}
+    querySQL := NewSqlCommand()
     querySQL.WriteString("SELECT COUNT(0) FROM ( ")
-    querySQL.WriteString(noLimitQuery)
+    querySQL.Add(noLimitQuery)
     querySQL.WriteString(" ) a")
     // 返回查询SQL
-    return querySQL.String(), nil
+    return querySQL, nil
 }
 
 // buildCountQueryFromRawQuery 根据原始查询构造count语句
-func (q *Querier) buildCountQueryFromRawQuery() (string, error) {
-    if q.QuerySQL == "" {
-        return "", errors.New("query sql can not be empty")
+func (q *Querier) buildCountQueryFromRawQuery() (*SqlCommand, error) {
+    if q.QuerySQL.IsEmpty() {
+        return nil, errors.New("query sql can not be empty")
     }
     // 先简单处理(逻辑上有问题，后续再解决)
-    lowerQuerySQL := strings.ToLower(q.QuerySQL)
-    limitPos := strings.LastIndex(lowerQuerySQL, " limit ")
-    noLimitQuery := q.QuerySQL
+    queryCommand := q.QuerySQL.Command()
+    command := strings.ToLower(queryCommand)
+    limitPos := strings.LastIndex(command, " limit ")
+    noLimitQuery := queryCommand
     if limitPos > 0 {
-        noLimitQuery = q.QuerySQL[0:limitPos]
+        noLimitQuery = queryCommand[0:limitPos]
     }
 
     // 构造count语句
@@ -404,7 +400,10 @@ func (q *Querier) buildCountQueryFromRawQuery() (string, error) {
     querySQL.WriteString(" ) a")
 
     // 返回查询SQL
-    return querySQL.String(), nil
+    return &SqlCommand{
+        command: querySQL,
+        values:  q.QuerySQL.Values(),
+    }, nil
 }
 
 // Query 执行查询,此处返回为切片，以保证返回值结果顺序与查询字段顺序一致
@@ -424,11 +423,11 @@ func (q *Querier) Query() (*QueryResult, error) {
 
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(q.QuerySQL)
+    l.SetCommand(q.QuerySQL.Command())
     defer l.Close()
 
     // 执行查询
-    rows, err := q.conn.Query(q.QuerySQL)
+    rows, err := q.conn.Query(q.QuerySQL.Command(), q.QuerySQL.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return nil, err
@@ -488,11 +487,11 @@ func (q *Querier) queryTotalCount() (int, error) {
 
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(countQuery)
+    l.SetCommand(countQuery.Command())
     defer l.Close()
 
     // 查询
-    countRow := q.conn.QueryRow(countQuery)
+    countRow := q.conn.QueryRow(countQuery.Command(), countQuery.Values()...)
     var totalCount int
     err = countRow.Scan(&totalCount)
     if err != nil {
@@ -607,11 +606,11 @@ func (q *Querier) RawQuery() (*RawQueryResult, error) {
 
     // 获取日志对象
     l := NewLogger()
-    l.SetCommand(q.QuerySQL)
+    l.SetCommand(q.QuerySQL.Command())
     defer l.Close()
 
     // 执行查询
-    rows, err := q.conn.Query(q.QuerySQL)
+    rows, err := q.conn.Query(q.QuerySQL.Command(), q.QuerySQL.Values()...)
     if err != nil {
         l.Fail(err.Error())
         return nil, err
