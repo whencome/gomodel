@@ -349,8 +349,8 @@ func (q *Querier) buildQuery() error {
     querySQL.WriteString(noLimitQuery)
 
     // 设置limit信息
-    offset := NewValue(q.queryMaps["offset"]).Int64()
-    limitNum := NewValue(q.queryMaps["limit"]).Int64()
+    offset := Int64(q.queryMaps["offset"])
+    limitNum := Int64(q.queryMaps["limit"])
     if limitNum > 0 {
         querySQL.WriteString(fmt.Sprintf(" LIMIT %d, %d", offset, limitNum))
     }

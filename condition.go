@@ -19,7 +19,7 @@ type Condition struct {
 // NewAndCondition 创建一个And条件组
 func NewAndCondition() *Condition {
     return &Condition{
-        Logic: "AND",
+        Logic: LogicAnd,
         Data:  make([]interface{}, 0),
     }
 }
@@ -27,7 +27,7 @@ func NewAndCondition() *Condition {
 // NewOrCondition 创建一个Or条件组
 func NewOrCondition() *Condition {
     return &Condition{
-        Logic: "OR",
+        Logic: LogicOr,
         Data:  make([]interface{}, 0),
     }
 }
@@ -81,11 +81,11 @@ func BuildCondition(conds interface{}) (string, error) {
     if conds == nil {
         return "", nil
     }
-    return NewConditionBuilder().Build(conds, "AND")
+    return NewConditionBuilder().Build(conds, LogicAnd)
 }
 
 func BuildConditionCommand(conds interface{}) (*SqlCommand, error) {
-    return NewConditionCommandBuilder().Build(conds, "AND")
+    return NewConditionCommandBuilder().Build(conds, LogicAnd)
 }
 
 /*********************************************************
@@ -95,27 +95,23 @@ func BuildConditionCommand(conds interface{}) (*SqlCommand, error) {
 // ConditionBuilder 条件构造器，构造SQL查询条件
 type ConditionBuilder struct{}
 
-// NewConditionBuilder 创建一个新的条件构造器
 func NewConditionBuilder() *ConditionBuilder {
     return &ConditionBuilder{}
 }
 
-// Build 构造SQL条件
 func (cb *ConditionBuilder) Build(conds interface{}, logic string) (string, error) {
     return cb.buildCondition(conds, logic)
 }
 
-// addSQLCondition 写入SQL查询条件
 func (cb *ConditionBuilder) addSQLCondition(buffer *bytes.Buffer, logic string, sqlPatch string) {
     if buffer.Len() > 0 {
+        buffer.WriteString(" ")
         buffer.WriteString(logic)
     }
-    buffer.WriteString(" ( ")
-    buffer.WriteString(sqlPatch)
-    buffer.WriteString(" ) ")
+    buffer.WriteString(" ")
+    buffer.WriteString(strings.TrimSpace(sqlPatch))
 }
 
-// buildCondition 构造逻辑查询条件
 func (cb *ConditionBuilder) buildCondition(conds interface{}, logic string) (string, error) {
     // 如果条件为空，则认为查询全部
     if conds == nil {
@@ -124,8 +120,8 @@ func (cb *ConditionBuilder) buildCondition(conds interface{}, logic string) (str
     // 构造查询条件
     // 查询逻辑，logic = AND/OR
     logic = strings.ToUpper(strings.TrimSpace(logic))
-    if logic == "" {
-        logic = "AND"
+    if logic != LogicOr {
+        logic = LogicAnd
     }
     buffer := &bytes.Buffer{}
     // 检查条件是否为已经写好的SQL段
@@ -145,12 +141,22 @@ func (cb *ConditionBuilder) buildCondition(conds interface{}, logic string) (str
         if len(condList) == 0 {
             break
         }
+        patch := ""
         for _, v := range condList {
             sqlPatch, err := cb.buildCondition(v, logic)
             if err != nil {
                 return "", err
             }
-            cb.addSQLCondition(buffer, logic, sqlPatch)
+            if sqlPatch == "" {
+                continue
+            }
+            if patch != "" {
+                patch += " " + logic + " "
+            }
+            patch += sqlPatch
+        }
+        if patch != "" {
+            cb.addSQLCondition(buffer, logic, " ("+patch+") ")
         }
     case map[string]interface{}:
         mapCond := conds.(map[string]interface{})
@@ -158,21 +164,37 @@ func (cb *ConditionBuilder) buildCondition(conds interface{}, logic string) (str
         if err != nil {
             return "", err
         }
+        if sqlPatch == "" {
+            break
+        }
         cb.addSQLCondition(buffer, logic, sqlPatch)
     case []map[string]interface{}:
-        listMapConds := conds.([]map[string]interface{})
-        for _, mapConds := range listMapConds {
-            sqlPatch, err := cb.buildMapCondition(mapConds, logic)
+        mapConds := conds.([]map[string]interface{})
+        patch := ""
+        for _, mapCond := range mapConds {
+            sqlPatch, err := cb.buildMapCondition(mapCond, logic)
             if err != nil {
                 return "", err
             }
-            cb.addSQLCondition(buffer, logic, sqlPatch)
+            if sqlPatch == "" {
+                continue
+            }
+            if patch != "" {
+                patch += " " + logic + " "
+            }
+            patch += sqlPatch
+        }
+        if patch != "" {
+            cb.addSQLCondition(buffer, logic, " ("+patch+") ")
         }
     case *Condition:
         c := conds.(*Condition)
         sqlPatch, err := c.Build()
         if err != nil {
             return "", err
+        }
+        if sqlPatch == "" {
+            break
         }
         cb.addSQLCondition(buffer, logic, sqlPatch)
     default:
@@ -187,15 +209,16 @@ func (cb *ConditionBuilder) buildMapCondition(conds map[string]interface{}, logi
     for k, v := range conds {
         k = strings.TrimSpace(k)
         mapLogic := strings.ToUpper(k)
-        // K如果是指定查询逻辑
-        if mapLogic == "AND" || mapLogic == "OR" {
+        // handle the case the k is query logic
+        // so, if you have a field named "and" or "or", you should use map condition carefully
+        if mapLogic == LogicAnd || mapLogic == LogicOr {
             sqlPatch, err := cb.buildCondition(v, mapLogic)
             if err != nil {
             }
             cb.addSQLCondition(buffer, mapLogic, sqlPatch)
             continue
         }
-        // K如果是指定查询字段
+        // in common cases, the k should be a table field
         field := k
         matchLogic := "="
         logicSep := strings.Index(k, " ")
@@ -222,7 +245,7 @@ func (cb *ConditionBuilder) buildMatchLogicQuery(field, matchLogic string, value
     field = strings.ReplaceAll(field, "`", "")
     switch matchLogic {
     case "=", "!=", ">", ">=", "<", "<=", "<>", "LIKE", "NOT LIKE", "IS":
-        fieldValue := NewValue(value).SQLValue()
+        fieldValue := SQLValue(value)
         return fmt.Sprintf("%s %s %s", quote(field), matchLogic, fieldValue), nil
     case "IN", "NOT IN":
         inVales := transValue2Array(value)
@@ -231,17 +254,17 @@ func (cb *ConditionBuilder) buildMatchLogicQuery(field, matchLogic string, value
         }
         fieldValues := make([]string, 0)
         for _, v := range inVales {
-            vv := NewValue(v).SQLValue()
+            vv := SQLValue(v)
             fieldValues = append(fieldValues, vv)
         }
         return fmt.Sprintf("%s %s (%s)", quote(field), matchLogic, strings.Join(fieldValues, ", ")), nil
     case "BETWEEN", "NOT BETWEEN":
         betweenVales := transValue2Array(value)
         if len(betweenVales) != 2 {
-            return "", fmt.Errorf("[%s] value count not qualified", matchLogic)
+            return "", fmt.Errorf("[%s] expect 2 params, got %d", matchLogic, len(betweenVales))
         }
-        firstV := NewValue(betweenVales[0]).SQLValue()
-        secondV := NewValue(betweenVales[1]).SQLValue()
+        firstV := SQLValue(betweenVales[0])
+        secondV := SQLValue(betweenVales[1])
         return fmt.Sprintf("%s %s %s AND %s", quote(field), matchLogic, firstV, secondV), nil
     default:
         return "", fmt.Errorf("unsupported match logic %s", matchLogic)
@@ -255,12 +278,14 @@ func (cb *ConditionBuilder) buildMatchLogicQuery(field, matchLogic string, value
 // ConditionCommandBuilder 条件构造器，构造SQL查询条件
 type ConditionCommandBuilder struct {
     *SqlCommand
+    groupOpened int
 }
 
 // NewConditionCommandBuilder 创建一个新的条件构造器
 func NewConditionCommandBuilder() *ConditionCommandBuilder {
     return &ConditionCommandBuilder{
-        NewSqlCommand(),
+        SqlCommand:  NewSqlCommand(),
+        groupOpened: 0,
     }
 }
 
@@ -276,11 +301,11 @@ func (cb *ConditionCommandBuilder) Build(conds interface{}, logic string) (*SqlC
 // addSQLCondition 写入SQL查询条件
 func (cb *ConditionCommandBuilder) addSQLCondition(logic string, sqlPatch string, values ...interface{}) {
     if cb.command.Len() > 0 {
+        cb.WriteString(" ")
         cb.WriteString(logic)
+        cb.WriteString(" ")
     }
-    cb.WriteString(" ( ")
     cb.WriteString(sqlPatch)
-    cb.WriteString(" ) ")
     if len(values) > 0 {
         cb.AddValues(values...)
     }
@@ -291,13 +316,30 @@ func (cb *ConditionCommandBuilder) addSQLCommand(logic string, sqlCommand *SqlCo
         return
     }
     if cb.command.Len() > 0 {
+        cb.WriteString(" ")
         cb.WriteString(logic)
+        cb.WriteString(" ")
     }
-    cb.WriteString(" ( ")
     cb.WriteString(sqlCommand.Command())
-    cb.WriteString(" ) ")
     if len(sqlCommand.values) > 0 {
         cb.AddValues(sqlCommand.values...)
+    }
+}
+
+func (cb *ConditionCommandBuilder) addCommandBuilder(logic string, builder *ConditionCommandBuilder) {
+    if builder == nil || builder.command.Len() == 0 {
+        return
+    }
+    if cb.command.Len() > 0 {
+        cb.WriteString(" ")
+        cb.WriteString(logic)
+        cb.WriteString(" ")
+    }
+    cb.WriteString(" (")
+    cb.WriteString(builder.Command())
+    cb.WriteString(") ")
+    if len(builder.values) > 0 {
+        cb.AddValues(builder.values...)
     }
 }
 
@@ -307,7 +349,6 @@ func (cb *ConditionCommandBuilder) buildCondition(conds interface{}, logic strin
     if conds == nil {
         return nil
     }
-    // 构造查询条件
     // 查询逻辑，logic = AND/OR
     logic = strings.ToUpper(strings.TrimSpace(logic))
     if logic != "OR" {
@@ -315,7 +356,6 @@ func (cb *ConditionCommandBuilder) buildCondition(conds interface{}, logic strin
     }
     // 检查条件是否为已经写好的SQL段
     switch conds.(type) {
-    // 查询内容为纯粹的sql段，无需处理
     case string:
         sqlPatch := conds.(string)
         cb.addSQLCondition(logic, sqlPatch)
@@ -330,40 +370,48 @@ func (cb *ConditionCommandBuilder) buildCondition(conds interface{}, logic strin
         if len(condList) == 0 {
             break
         }
+        builder := NewConditionCommandBuilder()
         for _, v := range condList {
-            err := cb.buildCondition(v, logic)
+            err := builder.buildCondition(v, logic)
             if err != nil {
                 return err
             }
         }
+        cb.addCommandBuilder(logic, builder)
     case map[string]interface{}:
         mapCond := conds.(map[string]interface{})
-        err := cb.buildMapCondition(mapCond, logic)
-        if err != nil {
-            return err
-        }
-    case []map[string]interface{}:
-        listMapConds := conds.([]map[string]interface{})
-        for _, mapConds := range listMapConds {
-            err := cb.buildMapCondition(mapConds, logic)
+        if len(mapCond) > 0 {
+            builder := NewConditionCommandBuilder()
+            err := cb.buildMapCondition(mapCond, logic)
             if err != nil {
                 return err
             }
+            cb.addCommandBuilder(logic, builder)
+        }
+    case []map[string]interface{}:
+        mapConds := conds.([]map[string]interface{})
+        if len(mapConds) > 0 {
+            builder := NewConditionCommandBuilder()
+            for _, mapCond := range mapConds {
+                err := builder.buildMapCondition(mapCond, logic)
+                if err != nil {
+                    return err
+                }
+            }
+            cb.addCommandBuilder(logic, builder)
         }
     case *Condition:
         c := conds.(*Condition)
         l := c.Logic
         if len(c.Data) > 0 {
-            newCb := NewConditionCommandBuilder()
+            builder := NewConditionCommandBuilder()
             for _, v := range c.Data {
-                partCmd, err := NewConditionCommandBuilder().Build(v, l)
-                // err := cb.buildCondition(v, l)
+                err := builder.buildCondition(v, l)
                 if err != nil {
                     return err
                 }
-                newCb.addSQLCommand(l, partCmd)
             }
-            cb.addSQLCommand(logic, newCb.SqlCommand)
+            cb.addCommandBuilder(logic, builder)
         }
     default:
         return fmt.Errorf("unsupported condition data type %T of %#v", conds, conds)
@@ -380,6 +428,7 @@ func (cb *ConditionCommandBuilder) buildMapCondition(conds map[string]interface{
         if mapLogic == "AND" || mapLogic == "OR" {
             err := cb.buildCondition(v, mapLogic)
             if err != nil {
+                return err
             }
             continue
         }
@@ -394,6 +443,9 @@ func (cb *ConditionCommandBuilder) buildMapCondition(conds map[string]interface{
         sqlPatch, err := cb.buildMatchLogicQuery(field, matchLogic, v)
         if err != nil {
             return err
+        }
+        if sqlPatch == nil {
+            continue
         }
         cb.addSQLCommand(logic, sqlPatch)
         continue
