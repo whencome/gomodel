@@ -45,6 +45,18 @@ func (s *ConnStat) LogFail(err error) {
     s.LastErr = err
 }
 
+func (s *ConnStat) LogSuccess() {
+    if s.FirstFailTime == 0 {
+        return
+    }
+    now := time.Now()
+    if now.Unix()-s.LastFailTime > 5*60 {
+        s.Reset()
+        return
+    }
+    s.DetectCount++
+}
+
 func (s *ConnStat) Reset() {
     s.DetectCount = 0
     s.FailCount = 0
@@ -150,13 +162,35 @@ func (m *ConnectionManager) Close() {
 }
 
 // CloseDB remove & close the given db connection
-func (m *ConnectionManager) CloseDB(dbName string) {
+func (m *ConnectionManager) CloseDB(dbName any) {
     _conn, ok := m.DBConns.LoadAndDelete(dbName)
     if !ok {
         return
     }
     conn := _conn.(*sql.DB)
     m.dirtyConns.PushBack(conn)
+}
+
+func (m *ConnectionManager) recordPing(dbName any, e error) *ConnStat {
+    var stat *ConnStat
+    _stat, ok := m.stats.Load(dbName)
+    if ok {
+        stat = _stat.(*ConnStat)
+    } else {
+        stat = new(ConnStat)
+    }
+    if e != nil {
+        stat.LogFail(e)
+    } else {
+        stat.LogSuccess()
+    }
+    m.stats.Store(dbName, stat)
+    return stat
+}
+
+func (m *ConnectionManager) resetStat(dbName any) {
+    stat := new(ConnStat)
+    m.stats.Store(dbName, stat)
 }
 
 func (m *ConnectionManager) watchConns() {
@@ -176,22 +210,11 @@ func (m *ConnectionManager) watchConns() {
         m.DBConns.Range(func(key, value any) bool {
             conn := value.(*sql.DB)
             err := conn.Ping()
-            if err == nil {
-                return true
+            stat := m.recordPing(key, err)
+            if err != nil && stat.FailCount >= 8 && stat.FailRate() > 90 {
+                m.CloseDB(key)
+                m.resetStat(key)
             }
-            var stat *ConnStat
-            _stat, ok := m.stats.Load(key)
-            if ok {
-                stat = _stat.(*ConnStat)
-                stat.LogFail(err)
-            } else {
-                stat = new(ConnStat)
-                stat.LogFail(err)
-            }
-            if stat.FailCount >= 8 && stat.FailRate() > 90 {
-                m.CloseDB(String(key))
-            }
-            m.stats.Store(key, stat)
             return true
         })
     }
