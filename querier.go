@@ -569,6 +569,31 @@ func (q *Querier) QueryAll() ([]map[string]string, error) {
     return queryResult.Rows, nil
 }
 
+func (q *Querier) QueryColumn(column string) ([]string, error) {
+    queryResult, err := q.Query()
+    if err != nil {
+        return []string{}, err
+    }
+    if queryResult.RowsCount == 0 {
+        return []string{}, nil
+    }
+    columnExists := false
+    for _, c := range queryResult.Columns {
+        if c == column {
+            columnExists = true
+            break
+        }
+    }
+    if !columnExists {
+        return []string{}, nil
+    }
+    result := make([]string, queryResult.RowsCount)
+    for i, row := range queryResult.Rows {
+        result[i] = row[column]
+    }
+    return result, nil
+}
+
 // QueryAssoc 查询全部记录并以自定field为键返回对应的map
 func (q *Querier) QueryAssoc(field string) (map[string]map[string]string, error) {
     queryResult, err := q.Query()
@@ -708,6 +733,31 @@ func (q *Querier) RawQueryAssoc(field string) (map[string]map[string][]uint8, er
         }
         k := String(v)
         result[k] = row
+    }
+    return result, nil
+}
+
+func (q *Querier) RawQueryColumn(column string) ([][]byte, error) {
+    queryResult, err := q.RawQuery()
+    if err != nil {
+        return [][]byte{}, err
+    }
+    if queryResult.RowsCount == 0 {
+        return [][]byte{}, nil
+    }
+    columnExists := false
+    for _, c := range queryResult.Columns {
+        if c == column {
+            columnExists = true
+            break
+        }
+    }
+    if !columnExists {
+        return [][]byte{}, nil
+    }
+    result := make([][]byte, queryResult.RowsCount)
+    for i, row := range queryResult.Rows {
+        result[i] = row[column]
     }
     return result, nil
 }
