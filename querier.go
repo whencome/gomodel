@@ -76,8 +76,8 @@ func NewQueryResult() *QueryResult {
     }
 }
 
-// RawQueryResult same as QueryResult, but the result data will not be force converted to string
-type RawQueryResult struct {
+// FindResult same as QueryResult, but the result data will not be force converted to string
+type FindResult struct {
     TotalCount int                  // 记录总数
     Offset     int                  // 偏移量，用于分页处理
     RowsCount  int                  // 当前查询的记录数量
@@ -85,8 +85,8 @@ type RawQueryResult struct {
     Rows       []map[string][]uint8 // 查询结果，一切皆字符串
 }
 
-func NewRawQueryResult() *RawQueryResult {
-    return &RawQueryResult{
+func NewFindResult() *FindResult {
+    return &FindResult{
         TotalCount: 0,
         Offset:     0,
         RowsCount:  0,
@@ -359,7 +359,7 @@ func (q *Querier) buildQuery() error {
 func (q *Querier) buildCountQuery() (*SqlCommand, error) {
     // 根据原始查询语句构造Count语句
     if q.isRaw && !q.QuerySQL.IsEmpty() && q.queryMaps["where"] == nil {
-        return q.buildCountQueryFromRawQuery()
+        return q.buildCountQueryFromFind()
     }
     // 根据条件构造Count语句
     return q.buildCountQueryFromConditions()
@@ -379,8 +379,8 @@ func (q *Querier) buildCountQueryFromConditions() (*SqlCommand, error) {
     return querySQL, nil
 }
 
-// buildCountQueryFromRawQuery 根据原始查询构造count语句
-func (q *Querier) buildCountQueryFromRawQuery() (*SqlCommand, error) {
+// buildCountQueryFromFind 根据原始查询构造count语句
+func (q *Querier) buildCountQueryFromFind() (*SqlCommand, error) {
     if q.QuerySQL.IsEmpty() {
         return nil, errors.New("query sql can not be empty")
     }
@@ -614,8 +614,8 @@ func (q *Querier) QueryAssoc(field string) (map[string]map[string]string, error)
     return result, nil
 }
 
-// RawQuery 执行查询,此处返回为切片，以保证返回值结果顺序与查询字段顺序一致
-func (q *Querier) RawQuery() (*RawQueryResult, error) {
+// Find 执行查询,此处返回为切片，以保证返回值结果顺序与查询字段顺序一致
+func (q *Querier) Find() (*FindResult, error) {
     // 构建查询
     err := q.buildQuery()
     if err != nil {
@@ -627,7 +627,7 @@ func (q *Querier) RawQuery() (*RawQueryResult, error) {
         return nil, err
     }
     // 执行查询
-    result := NewRawQueryResult()
+    result := NewFindResult()
 
     // 获取日志对象
     l := NewLogger()
@@ -676,10 +676,10 @@ func (q *Querier) RawQuery() (*RawQueryResult, error) {
     return result, nil
 }
 
-// RawQueryRow 查询单条记录
-func (q *Querier) RawQueryRow() (map[string][]uint8, error) {
+// FindRow 查询单条记录
+func (q *Querier) FindRow() (map[string][]uint8, error) {
     q.Limit(1)
-    queryResult, err := q.RawQuery()
+    queryResult, err := q.Find()
     if err != nil {
         return nil, err
     }
@@ -689,9 +689,9 @@ func (q *Querier) RawQueryRow() (map[string][]uint8, error) {
     return queryResult.Rows[0], nil
 }
 
-// RawQueryScalar 查询单个值
-func (q *Querier) RawQueryScalar() ([]uint8, error) {
-    queryResult, err := q.RawQuery()
+// FindScalar 查询单个值
+func (q *Querier) FindScalar() ([]uint8, error) {
+    queryResult, err := q.Find()
     if err != nil {
         return nil, err
     }
@@ -704,9 +704,9 @@ func (q *Querier) RawQueryScalar() ([]uint8, error) {
     return v, nil
 }
 
-// RawQueryAll 查询全部记录
-func (q *Querier) RawQueryAll() ([]map[string][]uint8, error) {
-    queryResult, err := q.RawQuery()
+// FindAll 查询全部记录
+func (q *Querier) FindAll() ([]map[string][]uint8, error) {
+    queryResult, err := q.Find()
     if err != nil {
         return nil, err
     }
@@ -716,9 +716,9 @@ func (q *Querier) RawQueryAll() ([]map[string][]uint8, error) {
     return queryResult.Rows, nil
 }
 
-// RawQueryAssoc 查询全部记录并以自定field为键返回对应的map
-func (q *Querier) RawQueryAssoc(field string) (map[string]map[string][]uint8, error) {
-    queryResult, err := q.RawQuery()
+// FindAssoc 查询全部记录并以自定field为键返回对应的map
+func (q *Querier) FindAssoc(field string) (map[string]map[string][]uint8, error) {
+    queryResult, err := q.Find()
     if err != nil {
         return nil, err
     }
@@ -737,8 +737,8 @@ func (q *Querier) RawQueryAssoc(field string) (map[string]map[string][]uint8, er
     return result, nil
 }
 
-func (q *Querier) RawQueryColumn(column string) ([][]byte, error) {
-    queryResult, err := q.RawQuery()
+func (q *Querier) FindColumn(column string) ([][]byte, error) {
+    queryResult, err := q.Find()
     if err != nil {
         return [][]byte{}, err
     }

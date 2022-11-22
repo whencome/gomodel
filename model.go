@@ -889,7 +889,7 @@ func (mm *ModelManager) FindPage(conds interface{}, orderBy string, page, pageSi
 
 // FindOne 查询单条数据
 func (mm *ModelManager) FindOne(conds interface{}, orderBy string) (Modeler, error) {
-    data, err := mm.NewQuerier().From(mm.GetTableName()).Where(conds).OrderBy(orderBy).RawQueryRow()
+    data, err := mm.NewQuerier().From(mm.GetTableName()).Where(conds).OrderBy(orderBy).FindRow()
     if err != nil {
         return nil, err
     }
@@ -902,7 +902,7 @@ func (mm *ModelManager) FindOne(conds interface{}, orderBy string) (Modeler, err
 
 // FindAll 查询满足条件的全部数据
 func (mm *ModelManager) FindAll(conds interface{}, orderBy string) ([]interface{}, error) {
-    queryRs, err := mm.NewQuerier().From(mm.GetTableName()).Where(conds).OrderBy(orderBy).RawQuery()
+    queryRs, err := mm.NewQuerier().From(mm.GetTableName()).Where(conds).OrderBy(orderBy).Find()
     if err != nil {
         return nil, err
     }
