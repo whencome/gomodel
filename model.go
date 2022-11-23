@@ -676,7 +676,6 @@ func (mm *ModelManager) Insert(obj interface{}) (int64, error) {
     l := NewLogger()
     l.SetCommand(insertCmd.Command())
     defer l.Close()
-    fmt.Printf("values: %+v\n", insertCmd.values)
     // 执行插入操作
     result, err := conn.Exec(insertCmd.Command(), insertCmd.Values()...)
     if err != nil {
