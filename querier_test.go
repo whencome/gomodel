@@ -93,3 +93,28 @@ func TestQuerier_QuerWithParam(t *testing.T) {
     }
     t.Logf("result: %+v", rs)
 }
+
+func TestQuerier_QueryNoRows(t *testing.T) {
+    xlog.Register("db", xlog.DefaultConfig())
+    conn, err := getConn()
+    if err != nil {
+        t.Logf("get connection failed: %s", err)
+        t.Fail()
+    }
+
+    // condition
+    cond := NewAndCondition()
+    cond.Add("id IN", []int{999999999999})
+
+    // build query
+    q := NewQuerier()
+    q.Connect(conn)
+    q.From("user")
+    q.Where(cond)
+    rs, err := q.QueryAll()
+    if err != nil {
+        t.Logf("get connection failed: %s", err)
+        t.Fail()
+    }
+    t.Logf("result: %+v", rs)
+}
