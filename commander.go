@@ -319,8 +319,22 @@ func (c *Commander) QueryScalar(command string, args ...interface{}) (string, er
     return data[firstColumn], nil
 }
 
-func (c *Commander) Insert(m Modeler) {}
+func (c *Commander) Model(m Modeler) *ModelManager {
+    mm := NewModelManager(m)
+    mm.GetDBFunc = func() (*sql.DB, error) {
+        return c.conn, nil
+    }
+    return mm
+}
 
-func (c *Commander) Update(m Modeler) {}
+func (c *Commander) Insert(m Modeler) (int64, error) {
+    return c.Model(m).Insert(m)
+}
 
-func (c *Commander) Delete(m Modeler) {}
+func (c *Commander) Update(m Modeler) (int64, error) {
+    return c.Model(m).Update(m)
+}
+
+func (c *Commander) Delete(m Modeler, cond interface{}) (int64, error) {
+    return c.Model(m).Delete(cond)
+}

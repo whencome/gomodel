@@ -10,12 +10,12 @@ import (
 
 // DatabaseConfig 定义数据库配置
 type DatabaseConfig struct {
-    Name        string `yaml:"name" json:"name"`                 // 数据库名称
-    Driver      string `yaml:"driver" json:"driver"`             // 驱动类型，sqlite3、mysql、clickhouse
-    DSN         string `yaml:"dsn" json:"dsn"`                   // 数据库连接配置
-    MaxLifeTime int    `yaml:"max_lifetime" json:"max_lifetime"` // 最大生命周期，单位：秒
-    MaxConns    int    `yaml:"max_conns" json:"max_conns"`       // 最大连接数
-    MaxIdles    int    `yaml:"max_idles" json:"max_idles"`       // 最大空闲连接数
+    Name        string `yaml:"name" toml:"name"  json:"name"`                        // 数据库名称
+    Driver      string `yaml:"driver" toml:"driver" json:"driver"`                   // 驱动类型，sqlite3、mysql、clickhouse
+    DSN         string `yaml:"dsn" toml:"dsn" json:"dsn"`                            // 数据库连接配置
+    MaxLifeTime int    `yaml:"max_lifetime" toml:"max_lifetime" json:"max_lifetime"` // 最大生命周期，单位：秒
+    MaxConns    int    `yaml:"max_conns" toml:"max_conns" json:"max_conns"`          // 最大连接数
+    MaxIdles    int    `yaml:"max_idles" toml:"max_idles" json:"max_idles"`          // 最大空闲连接数
 }
 
 // /////////////////// Connection Statistics ///////////////////////
